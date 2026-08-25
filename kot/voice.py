@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import re
 import subprocess
 import sys
 import time
@@ -17,6 +16,12 @@ import sherpa_onnx
 from .audio import build_ffmpeg_aec_command
 from .mic_led import MicArrayLeds
 from .music import PlayerController
+from .phrases import (
+    find_wake,
+    is_probable_wake_only,
+    normalize_text,
+    strip_wake_from_command,
+)
 from .ui import (
     ACK_TEXT,
     AUDIO_UNAVAILABLE_TEXT,
@@ -54,13 +59,6 @@ AEC_MIC_CHANNEL = int(os.getenv("KOT_AEC_MIC_CHANNEL", "4"))
 
 ASR_THREADS = int(os.getenv("KOT_ASR_THREADS", "2"))
 
-# Small Zipformer sometimes recognizes "кот" as "код".
-WAKE_PHRASES = (
-    "эй кот",
-    "эй код",
-    "ей кот",
-    "ей код",
-)
 WAKE_WINDOW_SECONDS = 3.0
 WAKE_DECODE_INTERVAL = 0.8
 WAKE_MIN_AUDIO_SECONDS = 1.2
@@ -306,37 +304,6 @@ def recognize(
     return text, elapsed, rtf
 
 
-def normalize_text(text: str) -> str:
-    text = text.lower().replace("ё", "е")
-    text = re.sub(r"[^\w\s]+", " ", text, flags=re.UNICODE)
-    return re.sub(r"\s+", " ", text).strip()
-
-
-def find_wake(text: str) -> tuple[bool, str, str]:
-    normalized = normalize_text(text)
-    best_position: int | None = None
-    best_phrase: str | None = None
-
-    for phrase in WAKE_PHRASES:
-        pos = normalized.find(phrase)
-        if pos < 0:
-            continue
-        if best_position is None or pos < best_position:
-            best_position = pos
-            best_phrase = phrase
-
-    if best_position is None or best_phrase is None:
-        return False, normalized, ""
-
-    command_start = best_position + len(best_phrase)
-    return True, normalized, normalized[command_start:].strip()
-
-
-def strip_wake_from_command(text: str) -> str:
-    found, normalized, command = find_wake(text)
-    return command if found else normalized
-
-
 def append_rolling(buffer: np.ndarray, samples: np.ndarray, max_samples: int) -> np.ndarray:
     if buffer.size == 0:
         buffer = samples.copy()
@@ -369,7 +336,7 @@ def process_vad_segments(
         print(f"[ACTIVE-ASR] {normalized}")
         command = strip_wake_from_command(normalized)
 
-        if not command:
+        if not command or is_probable_wake_only(command):
             wake_only_detected = True
             edge.patch(mode="listening", heard_text=normalized)
             continue
