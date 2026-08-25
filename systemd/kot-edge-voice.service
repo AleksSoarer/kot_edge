@@ -11,6 +11,8 @@ Environment=PYTHONUNBUFFERED=1
 Environment=KOT_EDGE_URL=http://127.0.0.1:8765
 Environment=KOT_VOICE_BASE=/home/khadas/voice-assistant
 Environment=KOT_WAKE_BACKEND=asr
+Environment=KOT_MIC_LED_DEVICE=/dev/ttyACM0
+Environment=KOT_MIC_LED_ON_WAKE=1
 # For the optional VIM3 NPU runner:
 # Environment="KOT_NPU_WAKE_COMMAND=/opt/kot-npu/kot-wake-runner --model /opt/kot-npu/hey-kot.nb"
 ExecStart=/home/khadas/kot_edge/.venv/bin/python -m kot.voice

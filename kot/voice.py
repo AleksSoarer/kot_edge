@@ -13,6 +13,7 @@ from urllib.request import Request, urlopen
 import numpy as np
 import sherpa_onnx
 
+from .mic_led import MicArrayLeds
 from .music import PlayerController
 from .ui import (
     ACK_TEXT,
@@ -52,6 +53,8 @@ WAKE_COOLDOWN_SECONDS = 1.0
 DEBUG_WAKE_ASR = os.getenv("KOT_DEBUG_WAKE_ASR", "0") == "1"
 WAKE_BACKEND = os.getenv("KOT_WAKE_BACKEND", "asr").strip().lower()
 NPU_WAKE_COMMAND = os.getenv("KOT_NPU_WAKE_COMMAND", "").strip()
+MIC_LED_DEVICE = os.getenv("KOT_MIC_LED_DEVICE", "/dev/ttyACM0").strip()
+MIC_LED_ON_WAKE = os.getenv("KOT_MIC_LED_ON_WAKE", "1") == "1"
 
 COMMAND_TIMEOUT_SECONDS = 8.0
 COMMAND_TIMEOUT_AFTER_WAKE_ONLY = 8.0
@@ -360,6 +363,7 @@ def main() -> int:
 
     edge = EdgeClient()
     music = PlayerController()
+    mic_leds = MicArrayLeds(MIC_LED_DEVICE, enabled=MIC_LED_ON_WAKE)
     recognizer = create_recognizer()
     vad = create_vad()
     print("Запуск MA-USB8...")
@@ -476,6 +480,7 @@ def main() -> int:
                         # previous state is remembered so non-music commands and
                         # timeouts can restore playback automatically.
                         music_was_playing = music.pause_for_wake()
+                        mic_leds.set_listening(True)
                         print()
                         print(f"[WAKE] {normalized}")
                         print("[ACTIVE] Слушаю команду...")
@@ -501,6 +506,7 @@ def main() -> int:
                             vad, recognizer, edge, music, music_was_playing
                         )
                         if command_done:
+                            mic_leds.set_listening(False)
                             state = "WAIT_WAKE"
                             vad = reset_vad(vad)
                             rolling = np.empty(0, dtype=np.float32)
@@ -525,6 +531,7 @@ def main() -> int:
                 command_deadline = time.monotonic() + COMMAND_TIMEOUT_AFTER_WAKE_ONLY
 
             if command_done:
+                mic_leds.set_listening(False)
                 state = "WAIT_WAKE"
                 vad = reset_vad(vad)
                 rolling = np.empty(0, dtype=np.float32)
@@ -540,6 +547,7 @@ def main() -> int:
                 print("[WAIT_WAKE] Жду: Эй, Кот")
                 print()
                 music_snapshot = music.resume_after_timeout(music_was_playing)
+                mic_leds.set_listening(False)
                 edge.patch(
                     mode="music" if music_snapshot.playing else "idle",
                     mic_online=True,
@@ -561,6 +569,7 @@ def main() -> int:
         print()
         print("Остановка...")
     finally:
+        mic_leds.set_listening(False)
         if state == "ACTIVE" and music_was_playing:
             music.play()
         stop_process(capture)

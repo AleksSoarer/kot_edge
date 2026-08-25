@@ -1,6 +1,6 @@
 # Kot Edge
 
-Текущая версия: **0.6.1**.
+Текущая версия: **0.6.2**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
@@ -75,9 +75,35 @@ KOT_MIC_GAIN=16.0
 KOT_ASR_THREADS=2
 KOT_DEBUG_WAKE_ASR=0
 KOT_WAKE_BACKEND=asr
+KOT_MIC_LED_DEVICE=/dev/ttyACM0
+KOT_MIC_LED_ON_WAKE=1
 KOT_EDGE_URL=http://127.0.0.1:8765
 KOT_VOICE_BASE=/home/khadas/voice-assistant
 ```
+
+### Индикация прослушивания на MA-USB8
+
+Через CDC ACM контроллер массива принимает штатные команды `E` и `e`. После
+обнаружения wake-word Кот отправляет `E`; после выполнения команды, timeout,
+ошибки или остановки worker — `e`.
+
+Проверьте serial-устройство:
+
+```bash
+ls -l /dev/ttyACM*
+```
+
+Если у пользователя `khadas` нет доступа, добавьте его в группу устройства
+(обычно `dialout`) и перезагрузите систему:
+
+```bash
+sudo usermod -aG dialout khadas
+sudo reboot
+```
+
+Индикация не является критичной: недоступный serial-порт записывается в журнал,
+но не останавливает распознавание. Отключить функцию можно через
+`KOT_MIC_LED_ON_WAKE=0`.
 
 ## Калибровка MA-USB8
 
