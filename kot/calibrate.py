@@ -51,12 +51,23 @@ def read_wav(path: Path) -> tuple[int, np.ndarray]:
     return sample_rate, samples.reshape((-1, channels))
 
 
-def record(device: str, seconds: float, output: Path) -> None:
-    output.parent.mkdir(parents=True, exist_ok=True)
-    command = [
+def positive_int(value: str) -> int:
+    parsed = int(value)
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("значение должно быть больше нуля")
+    return parsed
+
+
+def build_record_command(device: str, seconds: int, output: Path) -> list[str]:
+    return [
         "arecord", "-q", "-D", device, "-t", "wav", "-f", "S16_LE",
         "-r", "48000", "-c", "8", "-d", str(seconds), str(output),
     ]
+
+
+def record(device: str, seconds: int, output: Path) -> None:
+    output.parent.mkdir(parents=True, exist_ok=True)
+    command = build_record_command(device, seconds, output)
     print(f"Запись {seconds:g} с: {output}")
     subprocess.run(command, check=True)
 
@@ -89,7 +100,7 @@ def build_parser() -> argparse.ArgumentParser:
     record_parser = subparsers.add_parser("record", help="записать 8-канальный WAV")
     record_parser.add_argument("output", type=Path)
     record_parser.add_argument("--device", default="hw:MicArray,0")
-    record_parser.add_argument("--seconds", type=float, default=15.0)
+    record_parser.add_argument("--seconds", type=positive_int, default=15)
     record_parser.add_argument("--gain", type=float, default=16.0)
     analyze_parser = subparsers.add_parser("analyze", help="показать уровни каналов WAV")
     analyze_parser.add_argument("input", type=Path)

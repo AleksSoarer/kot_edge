@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kot-edge"
-version = "0.6.0"
+version = "0.6.1"
 description = "Lightweight local UI/status microserver for the Kot voice assistant on Khadas VIM3"
 requires-python = ">=3.10"
 dependencies = [

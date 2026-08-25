@@ -1,6 +1,8 @@
+from pathlib import Path
+
 import numpy as np
 
-from kot.calibrate import analyze_samples
+from kot.calibrate import analyze_samples, build_record_command
 
 
 def test_analyze_silent_channels() -> None:
@@ -23,3 +25,9 @@ def test_analyze_applies_voice_gain() -> None:
     result = analyze_samples(samples, gain=8.0)
     assert result[0].clipping_percent == 100.0
     assert result[0].peak_dbfs == 0.0
+
+
+def test_arecord_duration_is_an_integer() -> None:
+    command = build_record_command("hw:MicArray,0", 15, Path("test.wav"))
+    duration_index = command.index("-d") + 1
+    assert command[duration_index] == "15"
