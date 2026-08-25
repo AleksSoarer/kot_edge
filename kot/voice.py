@@ -6,6 +6,7 @@ import re
 import subprocess
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -13,6 +14,7 @@ from urllib.request import Request, urlopen
 import numpy as np
 import sherpa_onnx
 
+from .audio import build_ffmpeg_aec_command
 from .mic_led import MicArrayLeds
 from .music import PlayerController
 from .ui import (
@@ -36,6 +38,18 @@ MIC_CHANNELS = 8
 SOX_BEAM_CHANNEL = int(os.getenv("KOT_MIC_BEAM_CHANNEL", "7"))
 SAMPLE_RATE = 16000
 GAIN = float(os.getenv("KOT_MIC_GAIN", "16.0"))
+AEC_ENABLED = os.getenv("KOT_AEC_ENABLED", "0") == "1"
+AEC_MIC_SOURCE = os.getenv(
+    "KOT_AEC_MIC_SOURCE",
+    "alsa_input.usb-SipeedUSB_SipeedUSB_MicArray_2025082211-00.analog-surround-71",
+).strip()
+AEC_MONITOR_SOURCE = os.getenv(
+    "KOT_AEC_MONITOR_SOURCE",
+    "alsa_output.platform-auge_sound.stereo-fallback.monitor",
+).strip()
+AEC_FILTER_ORDER = int(os.getenv("KOT_AEC_FILTER_ORDER", "2048"))
+AEC_MU = float(os.getenv("KOT_AEC_MU", "0.25"))
+AEC_LEAKAGE = float(os.getenv("KOT_AEC_LEAKAGE", "0.0001"))
 
 ASR_THREADS = int(os.getenv("KOT_ASR_THREADS", "2"))
 
@@ -141,7 +155,38 @@ def reset_vad(vad: sherpa_onnx.VoiceActivityDetector) -> sherpa_onnx.VoiceActivi
     return create_vad(verbose=False)
 
 
-def start_capture() -> tuple[subprocess.Popen[bytes], subprocess.Popen[bytes]]:
+@dataclass
+class CapturePipeline:
+    stream: subprocess.Popen[bytes]
+    processes: tuple[subprocess.Popen[bytes], ...]
+    backend: str
+
+    def close(self) -> None:
+        for process in reversed(self.processes):
+            stop_process(process)
+
+
+def start_aec_capture() -> CapturePipeline:
+    ffmpeg = subprocess.Popen(
+        build_ffmpeg_aec_command(
+            monitor_source=AEC_MONITOR_SOURCE,
+            mic_source=AEC_MIC_SOURCE,
+            mic_sample_rate=MIC_SAMPLE_RATE,
+            mic_channels=MIC_CHANNELS,
+            beam_channel=SOX_BEAM_CHANNEL,
+            output_sample_rate=SAMPLE_RATE,
+            filter_order=AEC_FILTER_ORDER,
+            mu=AEC_MU,
+            leakage=AEC_LEAKAGE,
+        ),
+        stdout=subprocess.PIPE,
+        stderr=None,
+        bufsize=0,
+    )
+    return CapturePipeline(ffmpeg, (ffmpeg,), "Pulse monitor + FFmpeg NLMS")
+
+
+def start_legacy_capture() -> CapturePipeline:
     arecord_cmd = [
         "arecord",
         "-q",
@@ -197,7 +242,31 @@ def start_capture() -> tuple[subprocess.Popen[bytes], subprocess.Popen[bytes]]:
     )
     assert arecord.stdout is not None
     arecord.stdout.close()
-    return arecord, sox
+    return CapturePipeline(sox, (arecord, sox), "ALSA + SoX")
+
+
+def start_capture() -> CapturePipeline:
+    if not AEC_ENABLED:
+        return start_legacy_capture()
+
+    print("Запуск экспериментального AEC (Pulse monitor + FFmpeg NLMS)...")
+    try:
+        pipeline = start_aec_capture()
+    except (OSError, ValueError) as exc:
+        print(f"AEC недоступен ({exc}); переход на ALSA + SoX.", file=sys.stderr)
+        return start_legacy_capture()
+
+    time.sleep(0.5)
+    if pipeline.stream.poll() is None:
+        return pipeline
+
+    returncode = pipeline.stream.returncode
+    pipeline.close()
+    print(
+        f"AEC завершился при запуске с кодом {returncode}; переход на ALSA + SoX.",
+        file=sys.stderr,
+    )
+    return start_legacy_capture()
 
 
 def read_exact(stream, size: int) -> bytes | None:
@@ -370,21 +439,20 @@ def main() -> int:
     vad = create_vad()
     print("Запуск MA-USB8...")
     try:
-        arecord, capture = start_capture()
-    except OSError as exc:
+        capture = start_capture()
+    except (OSError, ValueError) as exc:
         edge.patch(mic_online=False, mode="error", message=MIC_UNAVAILABLE_TEXT)
-        print(f"Не удалось запустить arecord/sox: {exc}", file=sys.stderr)
+        print(f"Не удалось запустить захват звука: {exc}", file=sys.stderr)
         return 1
 
     time.sleep(0.3)
-    if arecord.poll() is not None:
-        edge.patch(mic_online=False, mode="error", message=MIC_UNAVAILABLE_TEXT)
-        print(f"arecord завершился с кодом {arecord.returncode}", file=sys.stderr)
-        return 1
-    if capture.poll() is not None:
+    if capture.stream.poll() is not None:
         edge.patch(mic_online=False, mode="error", message=AUDIO_UNAVAILABLE_TEXT)
-        print(f"SoX завершился с кодом {capture.returncode}", file=sys.stderr)
-        stop_process(arecord)
+        print(
+            f"Захват {capture.backend} завершился с кодом {capture.stream.returncode}",
+            file=sys.stderr,
+        )
+        capture.close()
         return 1
 
     npu_wake: NpuWakeDetector | None = None
@@ -392,18 +460,16 @@ def main() -> int:
         try:
             npu_wake = NpuWakeDetector(NPU_WAKE_COMMAND)
         except (OSError, ValueError) as exc:
-            stop_process(capture)
-            stop_process(arecord)
+            capture.close()
             print(f"Не удалось запустить NPU wake backend: {exc}", file=sys.stderr)
             return 1
         print(f"Wake backend: NPU runner ({NPU_WAKE_COMMAND})")
     elif WAKE_BACKEND != "asr":
-        stop_process(capture)
-        stop_process(arecord)
+        capture.close()
         print(f"Неизвестный KOT_WAKE_BACKEND: {WAKE_BACKEND}", file=sys.stderr)
         return 1
 
-    assert capture.stdout is not None
+    assert capture.stream.stdout is not None
     initial_music = music.snapshot()
     edge.patch(
         mic_online=True,
@@ -435,7 +501,8 @@ def main() -> int:
     print("================================================")
     print(f"Микрофон:     {MIC_DEVICE}")
     print("Вход:         8 ch / 48000 Hz")
-    print("Beam:         CH6")
+    print(f"Beam:         CH{SOX_BEAM_CHANNEL - 1}")
+    print(f"Capture:      {capture.backend}")
     print("ASR:          mono / 16000 Hz")
     print(f"Gain:         x{GAIN}")
     print('Wake phrase:  "Эй, Кот"')
@@ -445,7 +512,7 @@ def main() -> int:
 
     try:
         while True:
-            raw = read_exact(capture.stdout, bytes_per_window)
+            raw = read_exact(capture.stream.stdout, bytes_per_window)
             if raw is None:
                 edge.patch(mic_online=False, mode="error", message=MIC_STREAM_STOPPED_TEXT)
                 print("Поток микрофона остановился.", file=sys.stderr)
@@ -574,8 +641,7 @@ def main() -> int:
         mic_leds.set_listening(False)
         if state == "ACTIVE" and music_was_playing:
             music.play()
-        stop_process(capture)
-        stop_process(arecord)
+        capture.close()
         if npu_wake is not None:
             npu_wake.close()
         edge.patch(mic_online=False)

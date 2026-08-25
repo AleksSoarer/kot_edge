@@ -1,6 +1,6 @@
 # Kot Edge
 
-Текущая версия: **0.6.3**.
+Текущая версия: **0.7.0**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
@@ -78,6 +78,12 @@ KOT_WAKE_BACKEND=asr
 KOT_MIC_LED_DEVICE=/dev/ttyACM0
 KOT_MIC_LED_ON_WAKE=1
 KOT_MUSIC_WAKE_MUTE_SECONDS=3.0
+KOT_AEC_ENABLED=0
+KOT_AEC_MONITOR_SOURCE=alsa_output.platform-auge_sound.stereo-fallback.monitor
+KOT_AEC_MIC_SOURCE=alsa_input.usb-SipeedUSB_SipeedUSB_MicArray_2025082211-00.analog-surround-71
+KOT_AEC_FILTER_ORDER=2048
+KOT_AEC_MU=0.25
+KOT_AEC_LEAKAGE=0.0001
 KOT_EDGE_URL=http://127.0.0.1:8765
 KOT_VOICE_BASE=/home/khadas/voice-assistant
 ```
@@ -169,6 +175,68 @@ journalctl -u kot-edge-voice -f
 WAV-файлы исключены из Git. Для совместного анализа их нужно передавать
 отдельно, не добавляя в репозиторий.
 
+## Вычитание играющей музыки (AEC)
+
+В версии 0.7.0 добавлен экспериментальный AEC, который не создаёт виртуальный
+sink и не меняет маршрут Chromium. FFmpeg одновременно читает:
+
+- monitor обычного стереовыхода как чистый эталон музыки;
+- все 8 каналов MA-USB8 через PulseAudio/PipeWire;
+- выбранный `KOT_MIC_BEAM_CHANNEL`, нумеруемый как SoX `remix` от 1 до 8.
+
+После приведения обоих потоков к mono / 16 kHz адаптивный NLMS-фильтр вычитает
+из микрофона коррелирующую музыку. Затем применяется обычный `KOT_MIC_GAIN`, VAD
+и ASR. По тестовой записи фон стал тише примерно на 5–6 dB, а отношение речи к
+фону улучшилось примерно на 2–3 dB.
+
+Включение при ручном запуске:
+
+```bash
+KOT_AEC_ENABLED=1 .venv/bin/python -m kot.voice
+```
+
+В заголовке worker должно появиться:
+
+```text
+Capture:      Pulse monitor + FFmpeg NLMS
+```
+
+Если FFmpeg, Pulse-сервер или один из источников недоступен при запуске, worker
+печатает причину и автоматически возвращается к `ALSA + SoX`. Если уже
+работающий FFmpeg завершится позднее, systemd перезапустит worker.
+
+Актуальные имена источников проверяются так:
+
+```bash
+pactl list short sources
+```
+
+Имена задаются через `KOT_AEC_MONITOR_SOURCE` и `KOT_AEC_MIC_SOURCE`. Для
+системной службы также нужен доступ к пользовательскому Pulse-сокету:
+
+```ini
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
+```
+
+Установленный service-файл включает AEC по умолчанию. Чтобы временно вернуть
+старый тракт, создайте override:
+
+```bash
+sudo systemctl edit kot-edge-voice
+```
+
+```ini
+[Service]
+Environment=KOT_AEC_ENABLED=0
+```
+
+Затем примените его:
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl restart kot-edge-voice
+```
+
 ## Экспериментальный wake-word на VIM3 NPU
 
 Обычный режим `KOT_WAKE_BACKEND=asr` оставлен режимом по умолчанию. Вариант
@@ -204,7 +272,7 @@ wake-word модели с помощью VIM3 NPU SDK/Acuity Toolkit и пров
 
 ```bash
 sudo apt update
-sudo apt install -y alsa-utils sox playerctl
+sudo apt install -y alsa-utils sox playerctl ffmpeg pulseaudio-utils
 ```
 
 Для новой установки:

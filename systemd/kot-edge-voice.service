@@ -11,9 +11,14 @@ Environment=PYTHONUNBUFFERED=1
 Environment=KOT_EDGE_URL=http://127.0.0.1:8765
 Environment=KOT_VOICE_BASE=/home/khadas/voice-assistant
 Environment=KOT_WAKE_BACKEND=asr
+Environment=KOT_MIC_BEAM_CHANNEL=7
 Environment=KOT_MIC_LED_DEVICE=/dev/ttyACM0
 Environment=KOT_MIC_LED_ON_WAKE=1
 Environment=KOT_MUSIC_WAKE_MUTE_SECONDS=3.0
+Environment=KOT_AEC_ENABLED=1
+Environment=KOT_AEC_MONITOR_SOURCE=alsa_output.platform-auge_sound.stereo-fallback.monitor
+Environment=KOT_AEC_MIC_SOURCE=alsa_input.usb-SipeedUSB_SipeedUSB_MicArray_2025082211-00.analog-surround-71
+Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 # For the optional VIM3 NPU runner:
 # Environment="KOT_NPU_WAKE_COMMAND=/opt/kot-npu/kot-wake-runner --model /opt/kot-npu/hey-kot.nb"
 ExecStart=/home/khadas/kot_edge/.venv/bin/python -m kot.voice
