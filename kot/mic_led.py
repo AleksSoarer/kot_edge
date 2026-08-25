@@ -25,7 +25,10 @@ class MicArrayLeds:
                 self.device,
                 flags,
             )
-            os.write(descriptor, b"E" if listening else b"e")
+            # This MA-USB8 firmware shows red D1 in the disabled (`e`) mode.
+            # We use that as the confirmed-wake indicator. `E` restores the
+            # normal blue sound-direction visualization.
+            os.write(descriptor, b"e" if listening else b"E")
             self._warned = False
         except OSError as exc:
             if not self._warned:

@@ -55,6 +55,7 @@ WAKE_BACKEND = os.getenv("KOT_WAKE_BACKEND", "asr").strip().lower()
 NPU_WAKE_COMMAND = os.getenv("KOT_NPU_WAKE_COMMAND", "").strip()
 MIC_LED_DEVICE = os.getenv("KOT_MIC_LED_DEVICE", "/dev/ttyACM0").strip()
 MIC_LED_ON_WAKE = os.getenv("KOT_MIC_LED_ON_WAKE", "1") == "1"
+MUSIC_WAKE_MUTE_SECONDS = float(os.getenv("KOT_MUSIC_WAKE_MUTE_SECONDS", "3.0"))
 
 COMMAND_TIMEOUT_SECONDS = 8.0
 COMMAND_TIMEOUT_AFTER_WAKE_ONLY = 8.0
@@ -364,6 +365,7 @@ def main() -> int:
     edge = EdgeClient()
     music = PlayerController()
     mic_leds = MicArrayLeds(MIC_LED_DEVICE, enabled=MIC_LED_ON_WAKE)
+    mic_leds.set_listening(False)
     recognizer = create_recognizer()
     vad = create_vad()
     print("Запуск MA-USB8...")
@@ -479,7 +481,7 @@ def main() -> int:
                         # Silence Chromium/Yandex Music before active ASR. The
                         # previous state is remembered so non-music commands and
                         # timeouts can restore playback automatically.
-                        music_was_playing = music.pause_for_wake()
+                        music_was_playing = music.pause_for_wake(MUSIC_WAKE_MUTE_SECONDS)
                         mic_leds.set_listening(True)
                         print()
                         print(f"[WAKE] {normalized}")

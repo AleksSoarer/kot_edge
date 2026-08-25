@@ -1,3 +1,5 @@
+from unittest.mock import patch
+
 from kot.music import PlayerController, parse_music_command
 
 
@@ -105,3 +107,23 @@ def test_now_playing_returns_track_as_reply() -> None:
 
     result = FakeController().finish_command("что играет", was_playing=False)
     assert result.reply_text == "Кино — Спокойная ночь"
+
+
+def test_restore_playback_honors_minimum_wake_pause() -> None:
+    class FakeController(PlayerController):
+        def __init__(self) -> None:
+            self._resume_not_before = 103.0
+            self.play_called = False
+
+        def play(self) -> bool:
+            self.play_called = True
+            return True
+
+    controller = FakeController()
+    with (
+        patch("kot.music.time.monotonic", return_value=100.0),
+        patch("kot.music.time.sleep") as sleep,
+    ):
+        controller._restore_playback()
+    sleep.assert_called_once_with(3.0)
+    assert controller.play_called is True

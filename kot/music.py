@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import time
 from dataclasses import dataclass
 from typing import Literal
 
@@ -270,13 +271,22 @@ class PlayerController:
         target = current / 100.0 + delta
         return self.set_volume(round(max(0.0, min(1.0, target)) * 100))
 
-    def pause_for_wake(self) -> bool:
+    def pause_for_wake(self, minimum_pause: float = 0.0) -> bool:
         """Pause only when music was actually playing; return that previous state."""
 
         was_playing = self.is_playing()
         if was_playing and self.pause():
+            self._resume_not_before = time.monotonic() + max(0.0, minimum_pause)
             print("[MUSIC] Пауза на время команды")
         return was_playing
+
+    def _restore_playback(self) -> bool:
+        resume_not_before = getattr(self, "_resume_not_before", 0.0)
+        remaining = resume_not_before - time.monotonic()
+        if remaining > 0:
+            print(f"[MUSIC] Минимальная пауза: ещё {remaining:.2f} c")
+            time.sleep(remaining)
+        return self.play()
 
     @staticmethod
     def _now_playing_reply(snapshot: MusicSnapshot) -> str:
@@ -302,31 +312,31 @@ class PlayerController:
             self.next()
             print("[MUSIC] next")
             if was_playing:
-                self.play()
+                self._restore_playback()
         elif action == "previous":
             self.previous()
             print("[MUSIC] previous")
             if was_playing:
-                self.play()
+                self._restore_playback()
         elif action == "volume_up":
             self.change_volume(self.volume_step)
             print("[MUSIC] volume up")
             if was_playing:
-                self.play()
+                self._restore_playback()
         elif action == "volume_down":
             self.change_volume(-self.volume_step)
             print("[MUSIC] volume down")
             if was_playing:
-                self.play()
+                self._restore_playback()
         elif action == "now_playing":
             snapshot = self.snapshot()
             reply_text = self._now_playing_reply(snapshot)
             if was_playing:
-                self.play()
+                self._restore_playback()
         elif was_playing:
             # The music was paused only to improve ASR. For a non-music command,
             # restore the exact pre-wake intent: it should keep playing.
-            self.play()
+            self._restore_playback()
             print("[MUSIC] Возобновление после команды")
 
         snapshot = self.snapshot()
@@ -337,6 +347,6 @@ class PlayerController:
 
     def resume_after_timeout(self, was_playing: bool) -> MusicSnapshot:
         if was_playing:
-            self.play()
+            self._restore_playback()
             print("[MUSIC] Возобновление после timeout")
         return self.snapshot()
