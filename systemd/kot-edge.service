@@ -1,0 +1,17 @@
+[Unit]
+Description=Kot Edge local UI/status server
+After=network.target
+
+[Service]
+Type=simple
+User=khadas
+WorkingDirectory=/home/khadas/kot_edge
+Environment=PYTHONUNBUFFERED=1
+Environment=KOT_EDGE_HOST=127.0.0.1
+Environment=KOT_EDGE_PORT=8765
+ExecStart=/home/khadas/kot_edge/.venv/bin/python -m uvicorn kot.main:app --host 127.0.0.1 --port 8765
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

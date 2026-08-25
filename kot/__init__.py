@@ -1,0 +1,1 @@
+"""Kot Edge application package."""

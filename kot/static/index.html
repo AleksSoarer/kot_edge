@@ -1,0 +1,74 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>KOT</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <main class="screen">
+    <header class="topline">
+      <span class="brand">KOT // EDGE</span>
+      <span id="clock">--:--</span>
+    </header>
+
+    <section class="hero">
+      <div class="cat-block">
+        <div class="cat-wrap">
+          <pre id="cat" class="cat" aria-label="Морда Кота"></pre>
+          <div id="reply" class="reply hidden" aria-live="polite"></div>
+        </div>
+        <div id="heard" class="heard hidden" aria-live="polite"></div>
+      </div>
+
+      <div class="mode">
+        <div id="modeIcon" class="mode-icon"></div>
+        <div>
+          <div id="modeTitle" class="mode-title"></div>
+          <div id="message" class="message"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="trackBox" class="track hidden">
+      <div id="trackIcon" class="track-icon">♪</div>
+      <div class="track-text">
+        <div id="track" class="track-name"></div>
+        <div id="artist" class="artist"></div>
+      </div>
+      <div id="volume" class="volume"></div>
+    </section>
+
+    <section class="status-grid">
+      <div class="status-cell">
+        <span id="micLed" class="led"></span>
+        <span class="label">MIC</span>
+        <span id="micText" class="value">--</span>
+      </div>
+      <div class="status-cell">
+        <span id="coreLed" class="led"></span>
+        <span class="label">CORE</span>
+        <span id="coreText" class="value">--</span>
+      </div>
+      <div class="status-cell">
+        <span id="haLed" class="led"></span>
+        <span class="label">HOME</span>
+        <span id="haText" class="value">--</span>
+      </div>
+      <div class="status-cell">
+        <span id="netLed" class="led"></span>
+        <span class="label">EDGE</span>
+        <span id="netText" class="value">--</span>
+      </div>
+    </section>
+
+    <footer class="bottomline">
+      <span id="updated">--</span>
+      <span class="hint">say: "ЭЙ, КОТ"</span>
+    </footer>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

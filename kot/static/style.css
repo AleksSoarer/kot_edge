@@ -1,0 +1,278 @@
+:root {
+  --bg: #050705;
+  --fg: #d7ffd7;
+  --dim: #6c8f6c;
+  --line: #274427;
+  --alert: #ffd6d6;
+  --cell: #0a100a;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: "DejaVu Sans Mono", "Liberation Mono", monospace;
+}
+
+body {
+  display: grid;
+  place-items: center;
+}
+
+.screen {
+  width: min(94vw, 1200px);
+  height: min(92vh, 760px);
+  display: grid;
+  grid-template-rows: auto 1fr auto auto;
+  gap: 22px;
+  padding: 28px;
+  border: 2px solid var(--line);
+  background: var(--bg);
+}
+
+.topline,
+.bottomline {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--dim);
+  letter-spacing: 0.14em;
+  font-size: clamp(14px, 1.5vw, 21px);
+}
+
+.brand {
+  color: var(--fg);
+  font-weight: 700;
+}
+
+.hero {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.1fr) minmax(260px, 0.9fr);
+  align-items: center;
+  gap: 46px;
+  min-height: 0;
+}
+
+.cat-wrap {
+  position: relative;
+  display: inline-block;
+}
+
+.reply {
+  position: absolute;
+  left: 100%;
+  top: 52%;
+  margin-left: clamp(14px, 1.8vw, 28px);
+  transform: translateY(-50%);
+  color: var(--fg);
+  font-size: clamp(15px, 2vw, 28px);
+  font-weight: 700;
+  line-height: 1;
+  white-space: nowrap;
+  text-shadow: 0 0 12px rgba(215, 255, 215, 0.10);
+  opacity: 1;
+  transition: opacity 140ms linear;
+  pointer-events: none;
+}
+
+.reply::before {
+  content: "< ";
+  color: var(--dim);
+}
+
+.reply.hidden {
+  visibility: hidden;
+  opacity: 0;
+}
+
+.cat {
+  margin: 0;
+  justify-self: center;
+  color: var(--fg);
+  font-weight: 700;
+  font-size: clamp(22px, 4.0vw, 58px);
+  line-height: 0.92;
+  letter-spacing: 0;
+  text-shadow: 0 0 12px rgba(215, 255, 215, 0.10);
+  user-select: none;
+}
+
+.mode {
+  display: flex;
+  align-items: center;
+  gap: 22px;
+  min-width: 0;
+}
+
+.mode-icon {
+  font-size: clamp(36px, 5vw, 72px);
+  line-height: 1;
+}
+
+.mode-title {
+  font-size: clamp(32px, 5.4vw, 82px);
+  line-height: 0.95;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+
+.message {
+  margin-top: 14px;
+  color: var(--dim);
+  font-size: clamp(16px, 2vw, 28px);
+}
+
+.track {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 18px;
+  align-items: center;
+  padding: 16px 20px;
+  border: 1px solid var(--line);
+  background: var(--cell);
+}
+
+.track.hidden {
+  visibility: hidden;
+}
+
+.track-icon {
+  font-size: 36px;
+}
+
+.track-name {
+  font-size: clamp(18px, 2.2vw, 30px);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.artist,
+.volume {
+  color: var(--dim);
+  font-size: clamp(13px, 1.5vw, 20px);
+}
+
+.status-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.status-cell {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 16px;
+  border-right: 1px solid var(--line);
+}
+
+.status-cell:last-child {
+  border-right: 0;
+}
+
+.led {
+  width: 10px;
+  height: 10px;
+  display: inline-block;
+  border: 1px solid var(--dim);
+  background: transparent;
+}
+
+.led.on {
+  background: var(--fg);
+  border-color: var(--fg);
+}
+
+.label {
+  color: var(--dim);
+}
+
+.value {
+  font-weight: 700;
+}
+
+.offline .mode-title,
+.error .mode-title {
+  color: var(--alert);
+}
+
+.offline .cat,
+.error .cat {
+  color: var(--alert);
+}
+
+@media (max-width: 820px) {
+  .screen {
+    height: 96vh;
+    padding: 20px;
+    gap: 14px;
+  }
+
+  .hero {
+    grid-template-columns: 1fr;
+    gap: 18px;
+  }
+
+  .cat {
+    font-size: clamp(22px, 8vw, 52px);
+  }
+
+  .reply {
+    margin-left: 12px;
+    font-size: clamp(13px, 3.2vw, 20px);
+  }
+
+  .mode {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .status-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .status-cell:nth-child(2) {
+    border-right: 0;
+  }
+
+  .status-cell:nth-child(-n+2) {
+    border-bottom: 1px solid var(--line);
+  }
+}
+
+.cat-block {
+  min-width: 0;
+  display: grid;
+  justify-items: center;
+  align-content: center;
+  gap: 24px;
+}
+
+.heard {
+  width: min(90%, 620px);
+  min-height: 1.4em;
+  color: var(--fg);
+  font-size: clamp(14px, 1.7vw, 24px);
+  line-height: 1.35;
+  text-align: center;
+  overflow-wrap: anywhere;
+  opacity: 1;
+  transition: opacity 180ms linear;
+}
+
+.heard.hidden {
+  visibility: hidden;
+  opacity: 0;
+}
