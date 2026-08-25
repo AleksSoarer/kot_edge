@@ -20,6 +20,7 @@ from .ui import (
     MIC_STREAM_STOPPED_TEXT,
     MIC_UNAVAILABLE_TEXT,
 )
+from .wake import NpuWakeDetector
 
 BASE = Path(os.getenv("KOT_VOICE_BASE", str(Path.home() / "voice-assistant"))).expanduser()
 MODEL = BASE / "sherpa-onnx-small-zipformer-ru-2024-09-18"
@@ -49,6 +50,8 @@ WAKE_DECODE_INTERVAL = 0.8
 WAKE_MIN_AUDIO_SECONDS = 1.2
 WAKE_COOLDOWN_SECONDS = 1.0
 DEBUG_WAKE_ASR = os.getenv("KOT_DEBUG_WAKE_ASR", "0") == "1"
+WAKE_BACKEND = os.getenv("KOT_WAKE_BACKEND", "asr").strip().lower()
+NPU_WAKE_COMMAND = os.getenv("KOT_NPU_WAKE_COMMAND", "").strip()
 
 COMMAND_TIMEOUT_SECONDS = 8.0
 COMMAND_TIMEOUT_AFTER_WAKE_ONLY = 8.0
@@ -359,7 +362,6 @@ def main() -> int:
     music = PlayerController()
     recognizer = create_recognizer()
     vad = create_vad()
-
     print("Запуск MA-USB8...")
     try:
         arecord, capture = start_capture()
@@ -377,6 +379,22 @@ def main() -> int:
         edge.patch(mic_online=False, mode="error", message=AUDIO_UNAVAILABLE_TEXT)
         print(f"SoX завершился с кодом {capture.returncode}", file=sys.stderr)
         stop_process(arecord)
+        return 1
+
+    npu_wake: NpuWakeDetector | None = None
+    if WAKE_BACKEND == "npu":
+        try:
+            npu_wake = NpuWakeDetector(NPU_WAKE_COMMAND)
+        except (OSError, ValueError) as exc:
+            stop_process(capture)
+            stop_process(arecord)
+            print(f"Не удалось запустить NPU wake backend: {exc}", file=sys.stderr)
+            return 1
+        print(f"Wake backend: NPU runner ({NPU_WAKE_COMMAND})")
+    elif WAKE_BACKEND != "asr":
+        stop_process(capture)
+        stop_process(arecord)
+        print(f"Неизвестный KOT_WAKE_BACKEND: {WAKE_BACKEND}", file=sys.stderr)
         return 1
 
     assert capture.stdout is not None
@@ -433,15 +451,26 @@ def main() -> int:
             if state == "WAIT_WAKE":
                 rolling = append_rolling(rolling, samples, wake_window_samples)
 
-                if len(rolling) >= wake_min_samples and now >= next_wake_decode:
-                    next_wake_decode = now + WAKE_DECODE_INTERVAL
-                    text, _, rtf = recognize(recognizer, rolling)
-                    normalized = normalize_text(text)
+                npu_event = npu_wake.accept(samples) if npu_wake is not None else None
+                run_asr_wake = (
+                    npu_wake is None
+                    and len(rolling) >= wake_min_samples
+                    and now >= next_wake_decode
+                )
+                if (npu_event is not None and npu_event.detected) or run_asr_wake:
+                    if npu_event is not None:
+                        score = "" if npu_event.score is None else f" score={npu_event.score:.3f}"
+                        normalized = f"эй кот [npu{score}]"
+                        found = True
+                    else:
+                        next_wake_decode = now + WAKE_DECODE_INTERVAL
+                        text, _, rtf = recognize(recognizer, rolling)
+                        normalized = normalize_text(text)
 
-                    if DEBUG_WAKE_ASR and normalized:
-                        print(f"[WAKE-ASR] {normalized} (RTF={rtf:.2f})")
+                        if DEBUG_WAKE_ASR and normalized:
+                            print(f"[WAKE-ASR] {normalized} (RTF={rtf:.2f})")
 
-                    found, _, _ = find_wake(normalized)
+                        found, _, _ = find_wake(normalized)
                     if found:
                         # Silence Chromium/Yandex Music before active ASR. The
                         # previous state is remembered so non-music commands and
@@ -536,6 +565,8 @@ def main() -> int:
             music.play()
         stop_process(capture)
         stop_process(arecord)
+        if npu_wake is not None:
+            npu_wake.close()
         edge.patch(mic_online=False)
 
     return 0

@@ -1,5 +1,7 @@
 # Kot Edge
 
+Текущая версия: **0.6.0**.
+
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
 ## Структура
@@ -72,9 +74,97 @@ KOT_MIC_BEAM_CHANNEL=7
 KOT_MIC_GAIN=16.0
 KOT_ASR_THREADS=2
 KOT_DEBUG_WAKE_ASR=0
+KOT_WAKE_BACKEND=asr
 KOT_EDGE_URL=http://127.0.0.1:8765
 KOT_VOICE_BASE=/home/khadas/voice-assistant
 ```
+
+## Калибровка MA-USB8
+
+В версии 0.6.0 добавлена команда `kot-mic-calibrate`. Она пишет исходный
+8-канальный WAV без `KOT_MIC_GAIN` и показывает RMS, peak и долю клиппинга для
+каждого канала. У MA-USB8 каналы CH0–CH5 сырые, CH6 — результат аппаратного
+beamforming, CH7 — дополнительный сырой канал.
+
+Остановите voice-worker, чтобы он не удерживал ALSA-устройство:
+
+```bash
+sudo systemctl stop kot-edge-voice
+mkdir -p ~/kot-mic-tests
+```
+
+Проверьте имя устройства:
+
+```bash
+arecord -l
+arecord --dump-hw-params -D hw:MicArray,0 /dev/null
+```
+
+Сделайте четыре записи по 15 секунд. В каждой сначала оставьте 3 секунды
+тишины, затем несколько раз обычным голосом произнесите «Эй, Кот, который час»:
+
+```bash
+kot-mic-calibrate record ~/kot-mic-tests/01-near.wav --seconds 15
+kot-mic-calibrate record ~/kot-mic-tests/02-far.wav --seconds 15
+kot-mic-calibrate record ~/kot-mic-tests/03-side.wav --seconds 15
+# Перед последней записью включите музыку с обычной громкостью.
+kot-mic-calibrate record ~/kot-mic-tests/04-music.wav --seconds 15
+```
+
+`near` записывается с 0,5 м, `far` — с обычного места пользователя, `side` —
+сбоку от массива. Команда сразу печатает отчёт; существующий файл можно
+проанализировать повторно:
+
+```bash
+kot-mic-calibrate analyze ~/kot-mic-tests/04-music.wav
+```
+
+Отчёт показывает и сырой сигнал, и результат после текущего программного
+`gain x16`. Ориентиры для обработанной речи: peak примерно от -12 до -3 dBFS,
+отсутствие клиппинга и заметный рост RMS относительно первых секунд тишины.
+Если клиппинг есть только после gain, уменьшите `KOT_MIC_GAIN`; если он уже есть
+в сыром сигнале, нужно уменьшить аппаратный capture gain. Сравните прежде всего
+CH6 с тем сырым каналом CH0–CH5, который обращён к пользователю. Другой gain
+можно проверить без новой записи: `kot-mic-calibrate analyze FILE --gain 4`.
+
+После записи верните службу:
+
+```bash
+sudo systemctl start kot-edge-voice
+journalctl -u kot-edge-voice -f
+```
+
+WAV-файлы исключены из Git. Для совместного анализа их нужно передавать
+отдельно, не добавляя в репозиторий.
+
+## Экспериментальный wake-word на VIM3 NPU
+
+Обычный режим `KOT_WAKE_BACKEND=asr` оставлен режимом по умолчанию. Вариант
+`npu` подключает постоянно работающий нативный runner с моделью, подготовленной
+для Amlogic/VeriSilicon NPU:
+
+```bash
+KOT_WAKE_BACKEND=npu
+KOT_NPU_WAKE_COMMAND=/opt/kot-npu/kot-wake-runner --model /opt/kot-npu/hey-kot.nb
+```
+
+Контракт runner намеренно не зависит от vendor SDK:
+
+- stdin: непрерывный mono PCM S16_LE, 16 kHz;
+- stdout: JSON Lines;
+- отсутствие события не требует вывода;
+- детекция: `{"wake":true,"score":0.91}`;
+- диагностические сообщения runner должен писать в stderr.
+
+Python-процесс держит runner запущенным, передаёт ему каждый аудиофрейм и после
+детекции использует обычный VAD/ASR для команды. Если runner не стартует или
+завершается, voice-worker завершается с ошибкой, и systemd перезапускает его —
+тихого перехода на CPU нет, поэтому неверная NPU-конфигурация видна сразу.
+
+Файл `.nb` аппаратно и runtime-зависим. Его нужно получать из выбранной
+wake-word модели с помощью VIM3 NPU SDK/Acuity Toolkit и проверять на том же
+образе Linux и наборе библиотек, где работает Кот. Репозиторий пока задаёт
+готовую границу интеграции, но не выдаёт фиктивную универсальную `.nb`-модель.
 
 ## Установка
 
