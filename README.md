@@ -1,6 +1,6 @@
 # Kot Edge
 
-Текущая версия: **0.7.1**.
+Текущая версия: **0.7.2**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
@@ -81,6 +81,7 @@ KOT_MUSIC_WAKE_MUTE_SECONDS=3.0
 KOT_AEC_ENABLED=0
 KOT_AEC_MONITOR_SOURCE=alsa_output.platform-auge_sound.stereo-fallback.monitor
 KOT_AEC_MIC_SOURCE=alsa_input.usb-SipeedUSB_SipeedUSB_MicArray_2025082211-00.analog-surround-71
+KOT_AEC_MIC_CHANNEL=4
 KOT_AEC_FILTER_ORDER=2048
 KOT_AEC_MU=0.25
 KOT_AEC_LEAKAGE=0.0001
@@ -182,7 +183,7 @@ sink и не меняет маршрут Chromium. FFmpeg одновременн
 
 - monitor обычного стереовыхода как чистый эталон музыки;
 - все 8 каналов MA-USB8 через PulseAudio/PipeWire;
-- выбранный `KOT_MIC_BEAM_CHANNEL`, нумеруемый как SoX `remix` от 1 до 8.
+- выбранный `KOT_AEC_MIC_CHANNEL`, нумеруемый от 1 до 8.
 
 После приведения обоих потоков к mono / 16 kHz адаптивный NLMS-фильтр вычитает
 из микрофона коррелирующую музыку. Затем применяется обычный `KOT_MIC_GAIN`, VAD
@@ -217,6 +218,12 @@ pactl list short sources
 ```ini
 Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 ```
+
+Карта каналов Pulse 7.1 у MA-USB8 отличается от порядка сырого ALSA. Поэтому
+`KOT_MIC_BEAM_CHANNEL=7` продолжает выбирать аппаратный CH6 в старом
+`arecord + SoX`, а AEC использует отдельный `KOT_AEC_MIC_CHANNEL=4`, то есть
+рабочую позицию FFmpeg `c3`/`lfe`. Попытка использовать FFmpeg `c6` даёт
+полностью нулевой поток.
 
 В версии 0.7.1 установленный service-файл оставляет AEC выключенным: live-NLMS
 на текущем PipeWire требует дополнительной синхронизации часов monitor и

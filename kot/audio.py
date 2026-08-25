@@ -7,7 +7,7 @@ def build_ffmpeg_aec_command(
     mic_source: str,
     mic_sample_rate: int,
     mic_channels: int,
-    beam_channel: int,
+    mic_channel: int,
     output_sample_rate: int,
     filter_order: int,
     mu: float,
@@ -15,13 +15,13 @@ def build_ffmpeg_aec_command(
 ) -> list[str]:
     """Build a passive PulseAudio/PipeWire capture with an NLMS echo canceller.
 
-    ``beam_channel`` uses the one-based convention of SoX ``remix`` while
+    ``mic_channel`` uses a one-based user-facing convention while
     FFmpeg's ``pan`` filter addresses channels as c0, c1, ...
     """
-    channel = beam_channel - 1
+    channel = mic_channel - 1
     if not 0 <= channel < mic_channels:
         raise ValueError(
-            f"beam_channel must be between 1 and {mic_channels}, got {beam_channel}"
+            f"mic_channel must be between 1 and {mic_channels}, got {mic_channel}"
         )
     if filter_order < 1:
         raise ValueError("filter_order must be positive")

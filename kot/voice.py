@@ -50,6 +50,7 @@ AEC_MONITOR_SOURCE = os.getenv(
 AEC_FILTER_ORDER = int(os.getenv("KOT_AEC_FILTER_ORDER", "2048"))
 AEC_MU = float(os.getenv("KOT_AEC_MU", "0.25"))
 AEC_LEAKAGE = float(os.getenv("KOT_AEC_LEAKAGE", "0.0001"))
+AEC_MIC_CHANNEL = int(os.getenv("KOT_AEC_MIC_CHANNEL", "4"))
 
 ASR_THREADS = int(os.getenv("KOT_ASR_THREADS", "2"))
 
@@ -173,7 +174,7 @@ def start_aec_capture() -> CapturePipeline:
             mic_source=AEC_MIC_SOURCE,
             mic_sample_rate=MIC_SAMPLE_RATE,
             mic_channels=MIC_CHANNELS,
-            beam_channel=SOX_BEAM_CHANNEL,
+            mic_channel=AEC_MIC_CHANNEL,
             output_sample_rate=SAMPLE_RATE,
             filter_order=AEC_FILTER_ORDER,
             mu=AEC_MU,
@@ -503,6 +504,8 @@ def main() -> int:
     print("Вход:         8 ch / 48000 Hz")
     print(f"Beam:         CH{SOX_BEAM_CHANNEL - 1}")
     print(f"Capture:      {capture.backend}")
+    if capture.backend == "Pulse monitor + FFmpeg NLMS":
+        print(f"AEC mic:      c{AEC_MIC_CHANNEL - 1}")
     print("ASR:          mono / 16000 Hz")
     print(f"Gain:         x{GAIN}")
     print('Wake phrase:  "Эй, Кот"')
