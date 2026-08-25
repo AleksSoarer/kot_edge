@@ -1,6 +1,6 @@
 # Kot Edge
 
-Текущая версия: **0.7.0**.
+Текущая версия: **0.7.1**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
@@ -218,8 +218,10 @@ pactl list short sources
 Environment=PULSE_SERVER=unix:/run/user/1000/pulse/native
 ```
 
-Установленный service-файл включает AEC по умолчанию. Чтобы временно вернуть
-старый тракт, создайте override:
+В версии 0.7.1 установленный service-файл оставляет AEC выключенным: live-NLMS
+на текущем PipeWire требует дополнительной синхронизации часов monitor и
+USB-микрофона. Проверенный тракт `ALSA + SoX` используется по умолчанию. Для
+отдельного эксперимента AEC можно включить через override:
 
 ```bash
 sudo systemctl edit kot-edge-voice
@@ -227,7 +229,7 @@ sudo systemctl edit kot-edge-voice
 
 ```ini
 [Service]
-Environment=KOT_AEC_ENABLED=0
+Environment=KOT_AEC_ENABLED=1
 ```
 
 Затем примените его:
