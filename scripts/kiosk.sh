@@ -4,8 +4,9 @@ set -euo pipefail
 MUSIC_URL="${KOT_MUSIC_URL:-https://music.yandex.com/}"
 KOT_URL="${KOT_EDGE_URL:-http://127.0.0.1:8765/}"
 KOT_EDGE_WAIT_SECONDS="${KOT_EDGE_WAIT_SECONDS:-60}"
-MUSIC_WARMUP_SECONDS="${KOT_MUSIC_WARMUP_SECONDS:-20}"
+MUSIC_WARMUP_SECONDS="${KOT_MUSIC_WARMUP_SECONDS:-90}"
 MUSIC_STABILIZE_SECONDS="${KOT_MUSIC_STABILIZE_SECONDS:-3}"
+MUSIC_AUTOPAUSE="${KOT_MUSIC_AUTOPAUSE:-0}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MUSIC_EXTENSION_DIR="$SCRIPT_DIR/yandex-music-bootstrap"
 
@@ -66,27 +67,22 @@ for ((attempt = 0; attempt < MUSIC_WARMUP_SECONDS * 4; attempt++)); do
       break
     fi
     if [[ "$player_status" == "Playing" && -n "$player_title" ]]; then
-      # Pausing immediately after MPRIS appears can make Yandex discard the
-      # not-yet-stable queue and return to Stopped. Let the first track settle.
-      sleep "$MUSIC_STABILIZE_SECONDS"
-      playerctl --player="$player_name" pause >/dev/null 2>&1 || true
-      sleep 0.5
-      player_status="$(playerctl --player="$player_name" status 2>/dev/null || true)"
-      player_title="$(
-        playerctl --player="$player_name" metadata --format '{{title}}' 2>/dev/null \
-          || true
-      )"
-      if [[ "$player_status" == "Paused" && -n "$player_title" ]]; then
-        player_ready=1
-        break
+      player_ready=1
+      if [[ "$MUSIC_AUTOPAUSE" == "1" ]]; then
+        # Optional only: some Yandex versions discard a fresh queue when it is
+        # paused too early, so normal boot leaves playback running.
+        sleep "$MUSIC_STABILIZE_SECONDS"
+        playerctl --player="$player_name" pause >/dev/null 2>&1 || true
+        player_status="$(playerctl --player="$player_name" status 2>/dev/null || true)"
       fi
+      break
     fi
   fi
   sleep 0.25
 done
 
 if ((player_ready == 0)); then
-  echo "Yandex Music did not prepare a playable MPRIS queue in ${MUSIC_WARMUP_SECONDS}s" >&2
+  echo "Yandex Music did not start a playable MPRIS queue in ${MUSIC_WARMUP_SECONDS}s" >&2
 else
   echo "Yandex Music ready: $player_title ($player_status)"
 fi
