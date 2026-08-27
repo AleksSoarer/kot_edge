@@ -83,7 +83,7 @@ body {
 }
 
 .reply::before {
-  content: "\\_ ";
+  content: "\005C_ ";
   color: var(--dim);
 }
 
