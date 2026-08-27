@@ -4,7 +4,7 @@ set -euo pipefail
 MUSIC_URL="${KOT_MUSIC_URL:-https://music.yandex.com/}"
 KOT_URL="${KOT_EDGE_URL:-http://127.0.0.1:8765/}"
 KOT_EDGE_WAIT_SECONDS="${KOT_EDGE_WAIT_SECONDS:-60}"
-MUSIC_WARMUP_SECONDS="${KOT_MUSIC_WARMUP_SECONDS:-10}"
+MUSIC_WARMUP_SECONDS="${KOT_MUSIC_WARMUP_SECONDS:-20}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MUSIC_EXTENSION_DIR="$SCRIPT_DIR/yandex-music-bootstrap"
 
@@ -55,15 +55,18 @@ for ((attempt = 0; attempt < MUSIC_WARMUP_SECONDS * 4; attempt++)); do
       || true
   )"
   if [[ -n "$player_name" ]]; then
-    player_ready=1
-    playerctl --player="$player_name" pause >/dev/null 2>&1 || true
-    break
+    player_status="$(playerctl --player="$player_name" status 2>/dev/null || true)"
+    if [[ "$player_status" == "Playing" || "$player_status" == "Paused" ]]; then
+      player_ready=1
+      playerctl --player="$player_name" pause >/dev/null 2>&1 || true
+      break
+    fi
   fi
   sleep 0.25
 done
 
 if ((player_ready == 0)); then
-  echo "Yandex Music MPRIS player did not appear in ${MUSIC_WARMUP_SECONDS}s" >&2
+  echo "Yandex Music did not prepare a playable MPRIS queue in ${MUSIC_WARMUP_SECONDS}s" >&2
 fi
 
 # A second invocation uses the existing Chromium profile/window and opens Kot
