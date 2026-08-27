@@ -12,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
 from .music import MusicSnapshot, PlayerController
+from .system_stats import SystemMonitor, SystemSnapshot
 from .ui import MODE_UI, Mode
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -19,6 +20,7 @@ STATIC_DIR = BASE_DIR / "static"
 REPLY_SECONDS = float(os.getenv("KOT_REPLY_SECONDS", "2.3"))
 HEARD_SECONDS = float(os.getenv("KOT_HEARD_SECONDS", "12.0"))
 MUSIC_MONITOR_INTERVAL = float(os.getenv("KOT_MUSIC_MONITOR_INTERVAL", "2.0"))
+SYSTEM_MONITOR_INTERVAL = float(os.getenv("KOT_SYSTEM_MONITOR_INTERVAL", "2.0"))
 
 
 def utc_now() -> str:
@@ -56,6 +58,8 @@ class Status(BaseModel):
     core_online: bool = False
     ha_online: bool = False
     music_playing: bool = False
+    cpu_percent: int | None = Field(default=None, ge=0, le=100)
+    ram_percent: int | None = Field(default=None, ge=0, le=100)
 
     updated_at: str = Field(default_factory=utc_now)
 
@@ -192,6 +196,24 @@ class StateStore:
         await self.broadcast(snapshot)
         return snapshot
 
+    async def sync_system(self, system: SystemSnapshot) -> Status:
+        async with self._lock:
+            if (
+                self._status.cpu_percent == system.cpu_percent
+                and self._status.ram_percent == system.ram_percent
+            ):
+                return self._status.model_copy(deep=True)
+
+            data = self._status.model_dump()
+            data["cpu_percent"] = system.cpu_percent
+            data["ram_percent"] = system.ram_percent
+            data["updated_at"] = utc_now()
+            self._status = Status(**data)
+            snapshot = self._status.model_copy(deep=True)
+
+        await self.broadcast(snapshot)
+        return snapshot
+
     async def _clear_field_after(self, field: str, generation: int, delay: float) -> None:
         await asyncio.sleep(delay)
 
@@ -253,21 +275,37 @@ async def monitor_music() -> None:
         await asyncio.sleep(MUSIC_MONITOR_INTERVAL)
 
 
+async def monitor_system() -> None:
+    monitor = SystemMonitor()
+    while True:
+        try:
+            snapshot = await asyncio.to_thread(monitor.sample)
+            await store.sync_system(snapshot)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            print(f"[SYSTEM-MONITOR] {exc}")
+        await asyncio.sleep(SYSTEM_MONITOR_INTERVAL)
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    task: asyncio.Task[None] | None = None
+    tasks: list[asyncio.Task[None]] = []
     if MUSIC_MONITOR_INTERVAL > 0:
-        task = asyncio.create_task(monitor_music())
+        tasks.append(asyncio.create_task(monitor_music()))
+    if SYSTEM_MONITOR_INTERVAL > 0:
+        tasks.append(asyncio.create_task(monitor_system()))
     try:
         yield
     finally:
-        if task is not None:
+        for task in tasks:
             task.cancel()
+        for task in tasks:
             with suppress(asyncio.CancelledError):
                 await task
 
 
-app = FastAPI(title="Kot Edge", version="0.8.8", lifespan=lifespan)
+app = FastAPI(title="Kot Edge", version="0.9.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

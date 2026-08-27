@@ -14,6 +14,14 @@ def test_health() -> None:
     assert response.json() == {"status": "ok"}
 
 
+def test_status_contains_system_metrics() -> None:
+    response = client.get("/api/status")
+    assert response.status_code == 200
+    data = response.json()
+    assert "cpu_percent" in data
+    assert "ram_percent" in data
+
+
 def test_idle_presentation_comes_from_ui_module() -> None:
     response = client.post("/api/mode/idle")
     assert response.status_code == 200

@@ -15,6 +15,14 @@ function setLed(prefix, value) {
   $(`${prefix}Text`).textContent = value ? "OK" : "OFF";
 }
 
+function renderMeter(prefix, value) {
+  const available = Number.isFinite(value);
+  const percent = available ? Math.max(0, Math.min(100, Math.round(value))) : null;
+  const filled = percent === null ? 0 : Math.round(percent / 10);
+  $(`${prefix}Bar`).textContent = "|".repeat(filled) + "_".repeat(10 - filled);
+  $(`${prefix}Percent`).textContent = percent === null ? "--%" : `${String(percent).padStart(3)}%`;
+}
+
 function render(state) {
   const mode = state.mode || "idle";
 
@@ -25,6 +33,8 @@ function render(state) {
   renderText("message", state.message);
   renderOptional("heard", state.heard_text);
   renderOptional("reply", state.reply_text);
+  renderMeter("cpu", state.cpu_percent);
+  renderMeter("ram", state.ram_percent);
 
   setLed("mic", state.mic_online);
   setLed("core", state.core_online);

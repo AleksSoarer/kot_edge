@@ -48,6 +48,35 @@ body {
   font-size: clamp(14px, 1.5vw, 21px);
 }
 
+.topline {
+  display: grid;
+  grid-template-columns: 1fr auto 5ch;
+  column-gap: clamp(16px, 3vw, 42px);
+}
+
+.system-meters {
+  display: flex;
+  gap: clamp(14px, 2.4vw, 34px);
+  font-variant-numeric: tabular-nums;
+}
+
+.system-meter {
+  display: grid;
+  grid-template-columns: 3ch 10ch 4ch;
+  gap: 1ch;
+  white-space: pre;
+}
+
+.meter-label,
+.meter-bar {
+  color: var(--fg);
+}
+
+.meter-percent {
+  width: 4ch;
+  text-align: right;
+}
+
 .brand {
   color: var(--fg);
   font-weight: 700;
@@ -83,7 +112,7 @@ body {
 }
 
 .reply::before {
-  content: "\005C_ ";
+  content: "_ ";
   color: var(--dim);
 }
 
@@ -228,6 +257,16 @@ body {
   .hero {
     grid-template-columns: 1fr;
     gap: 18px;
+  }
+
+  .topline {
+    grid-template-columns: 1fr auto;
+  }
+
+  .system-meters {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-content: center;
   }
 
   .cat {
