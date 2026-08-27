@@ -1,0 +1,16 @@
+{
+  "manifest_version": 3,
+  "name": "Kot Yandex Music Bootstrap",
+  "version": "1.0.0",
+  "description": "Initialize the Yandex Music media session for Kot Edge.",
+  "content_scripts": [
+    {
+      "matches": [
+        "https://music.yandex.com/*",
+        "https://music.yandex.ru/*"
+      ],
+      "js": ["bootstrap.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

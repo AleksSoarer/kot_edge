@@ -5,6 +5,8 @@ MUSIC_URL="${KOT_MUSIC_URL:-https://music.yandex.com/}"
 KOT_URL="${KOT_EDGE_URL:-http://127.0.0.1:8765/}"
 KOT_EDGE_WAIT_SECONDS="${KOT_EDGE_WAIT_SECONDS:-60}"
 MUSIC_WARMUP_SECONDS="${KOT_MUSIC_WARMUP_SECONDS:-10}"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+MUSIC_EXTENSION_DIR="$SCRIPT_DIR/yandex-music-bootstrap"
 
 if command -v chromium >/dev/null 2>&1; then
   BROWSER="chromium"
@@ -36,10 +38,33 @@ done
   --disable-session-crashed-bubble \
   --disable-background-timer-throttling \
   --disable-renderer-backgrounding \
+  --autoplay-policy=no-user-gesture-required \
+  --load-extension="$MUSIC_EXTENSION_DIR" \
   "$MUSIC_URL" &
 
 browser_pid=$!
-sleep "$MUSIC_WARMUP_SECONDS"
+
+# The extension clicks Play once so that Chromium creates its MPRIS object.
+# Pause it as soon as playerctl can see it; Kot can then start it by voice.
+player_ready=0
+for ((attempt = 0; attempt < MUSIC_WARMUP_SECONDS * 4; attempt++)); do
+  player_name="$(
+    playerctl -l 2>/dev/null \
+      | grep -E '^(chromium|google-chrome)(\.|$)' \
+      | head -n 1 \
+      || true
+  )"
+  if [[ -n "$player_name" ]]; then
+    player_ready=1
+    playerctl --player="$player_name" pause >/dev/null 2>&1 || true
+    break
+  fi
+  sleep 0.25
+done
+
+if ((player_ready == 0)); then
+  echo "Yandex Music MPRIS player did not appear in ${MUSIC_WARMUP_SECONDS}s" >&2
+fi
 
 # A second invocation uses the existing Chromium profile/window and opens Kot
 # as the active tab. Yandex Music remains initialized in the background.
