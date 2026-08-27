@@ -98,7 +98,8 @@ body {
 .mic-levels {
   position: absolute;
   left: 0;
-  bottom: 0;
+  /* Keep the array readout close to the track panel, below the cat. */
+  bottom: clamp(-88px, -8vh, -52px);
   display: grid;
   grid-template-rows: repeat(8, 1em);
   gap: 0.16em;
