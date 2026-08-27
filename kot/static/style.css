@@ -83,7 +83,12 @@ body {
 }
 
 .reply::before {
-  content: "/\A\\_ ";
+  content: "\\_ ";
+  color: var(--dim);
+}
+
+.reply::after {
+  content: "\A/";
   white-space: pre;
   color: var(--dim);
 }
