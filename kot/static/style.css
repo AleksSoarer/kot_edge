@@ -69,9 +69,8 @@ body {
 .reply {
   position: absolute;
   left: 100%;
-  top: 52%;
+  top: 18%;
   margin-left: clamp(14px, 1.8vw, 28px);
-  transform: translateY(-50%);
   color: var(--fg);
   font-size: clamp(15px, 2vw, 28px);
   font-weight: 700;
@@ -84,7 +83,8 @@ body {
 }
 
 .reply::before {
-  content: "< ";
+  content: "/\A\\_ ";
+  white-space: pre;
   color: var(--dim);
 }
 
