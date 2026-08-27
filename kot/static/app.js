@@ -23,6 +23,15 @@ function renderMeter(prefix, value) {
   $(`${prefix}Percent`).textContent = percent === null ? "--%" : `${String(percent).padStart(3)}%`;
 }
 
+function renderMicLevels(values) {
+  const levels = Array.isArray(values) ? values : [];
+  for (let channel = 0; channel < 8; channel += 1) {
+    const value = Number.isFinite(levels[channel]) ? levels[channel] : 0;
+    const filled = Math.round(Math.max(0, Math.min(100, value)) * 8 / 100);
+    $(`micLevel${channel}`).textContent = "|".repeat(filled) + "_".repeat(8 - filled);
+  }
+}
+
 function render(state) {
   const mode = state.mode || "idle";
 
@@ -35,6 +44,7 @@ function render(state) {
   renderOptional("reply", state.reply_text);
   renderMeter("cpu", state.cpu_percent);
   renderMeter("ram", state.ram_percent);
+  renderMicLevels(state.mic_levels);
 
   setLed("mic", state.mic_online);
   setLed("core", state.core_online);

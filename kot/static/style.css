@@ -95,6 +95,30 @@ body {
   display: inline-block;
 }
 
+.mic-levels {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  display: grid;
+  grid-template-rows: repeat(8, 1em);
+  gap: 0.16em;
+  color: var(--dim);
+  font-size: clamp(11px, 1.15vw, 16px);
+  line-height: 1;
+  font-variant-numeric: tabular-nums;
+}
+
+.mic-meter {
+  display: grid;
+  grid-template-columns: 3ch 8ch;
+  gap: 1ch;
+  white-space: pre;
+}
+
+.mic-meter span:last-child {
+  color: var(--fg);
+}
+
 .reply {
   position: absolute;
   left: 100%;
@@ -269,6 +293,13 @@ body {
     justify-content: center;
   }
 
+  .mic-levels {
+    position: static;
+    grid-template-rows: repeat(4, 1em);
+    grid-auto-flow: column;
+    column-gap: 24px;
+  }
+
   .cat {
     font-size: clamp(22px, 8vw, 52px);
   }
@@ -297,6 +328,7 @@ body {
 }
 
 .cat-block {
+  position: relative;
   min-width: 0;
   display: grid;
   justify-items: center;

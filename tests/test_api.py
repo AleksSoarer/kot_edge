@@ -22,6 +22,14 @@ def test_status_contains_system_metrics() -> None:
     assert "ram_percent" in data
 
 
+def test_microphone_levels_can_be_published() -> None:
+    levels = [10, 20, 30, 40, 50, 60, 70, 80]
+    response = client.patch("/api/status", json={"mic_levels": levels})
+
+    assert response.status_code == 200
+    assert response.json()["mic_levels"] == levels
+
+
 def test_idle_presentation_comes_from_ui_module() -> None:
     response = client.post("/api/mode/idle")
     assert response.status_code == 200

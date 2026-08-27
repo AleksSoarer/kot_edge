@@ -60,6 +60,7 @@ class Status(BaseModel):
     music_playing: bool = False
     cpu_percent: int | None = Field(default=None, ge=0, le=100)
     ram_percent: int | None = Field(default=None, ge=0, le=100)
+    mic_levels: list[int] = Field(default_factory=lambda: [0] * 8)
 
     updated_at: str = Field(default_factory=utc_now)
 
@@ -82,6 +83,7 @@ class StatusPatch(BaseModel):
     core_online: bool | None = None
     ha_online: bool | None = None
     music_playing: bool | None = None
+    mic_levels: list[int] | None = None
 
 
 class StateStore:
@@ -305,7 +307,7 @@ async def lifespan(_: FastAPI):
                 await task
 
 
-app = FastAPI(title="Kot Edge", version="0.9.1", lifespan=lifespan)
+app = FastAPI(title="Kot Edge", version="0.10.0", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

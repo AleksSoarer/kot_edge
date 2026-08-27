@@ -43,6 +43,7 @@ MIC_CHANNELS = 8
 SOX_BEAM_CHANNEL = int(os.getenv("KOT_MIC_BEAM_CHANNEL", "7"))
 SAMPLE_RATE = 16000
 GAIN = float(os.getenv("KOT_MIC_GAIN", "16.0"))
+MIC_LEVEL_UPDATE_SECONDS = float(os.getenv("KOT_MIC_LEVEL_UPDATE_SECONDS", "0.25"))
 AEC_ENABLED = os.getenv("KOT_AEC_ENABLED", "0") == "1"
 AEC_MIC_SOURCE = os.getenv(
     "KOT_AEC_MIC_SOURCE",
@@ -159,6 +160,9 @@ class CapturePipeline:
     stream: subprocess.Popen[bytes]
     processes: tuple[subprocess.Popen[bytes], ...]
     backend: str
+    channels: int
+    selected_channel: int
+    meter_channel: int | None = None
 
     def close(self) -> None:
         for process in reversed(self.processes):
@@ -182,10 +186,21 @@ def start_aec_capture() -> CapturePipeline:
         stderr=None,
         bufsize=0,
     )
-    return CapturePipeline(ffmpeg, (ffmpeg,), "Pulse monitor + FFmpeg NLMS")
+    return CapturePipeline(
+        ffmpeg,
+        (ffmpeg,),
+        "Pulse monitor + FFmpeg NLMS",
+        channels=1,
+        selected_channel=0,
+        meter_channel=AEC_MIC_CHANNEL - 1,
+    )
 
 
 def start_legacy_capture() -> CapturePipeline:
+    selected_channel = SOX_BEAM_CHANNEL - 1
+    if not 0 <= selected_channel < MIC_CHANNELS:
+        raise ValueError(f"KOT_MIC_BEAM_CHANNEL должен быть от 1 до {MIC_CHANNELS}")
+
     arecord_cmd = [
         "arecord",
         "-q",
@@ -226,11 +241,7 @@ def start_legacy_capture() -> CapturePipeline:
         "-L",
         "-r",
         str(SAMPLE_RATE),
-        "-c",
-        "1",
         "-",
-        "remix",
-        str(SOX_BEAM_CHANNEL),
     ]
     sox = subprocess.Popen(
         sox_cmd,
@@ -241,7 +252,13 @@ def start_legacy_capture() -> CapturePipeline:
     )
     assert arecord.stdout is not None
     arecord.stdout.close()
-    return CapturePipeline(sox, (arecord, sox), "ALSA + SoX")
+    return CapturePipeline(
+        sox,
+        (arecord, sox),
+        "ALSA + SoX",
+        channels=MIC_CHANNELS,
+        selected_channel=selected_channel,
+    )
 
 
 def start_capture() -> CapturePipeline:
@@ -278,12 +295,22 @@ def read_exact(stream, size: int) -> bytes | None:
     return bytes(data)
 
 
-def pcm_to_float(raw: bytes) -> np.ndarray:
-    samples = np.frombuffer(raw, dtype="<i2").astype(np.float32)
-    samples /= 32768.0
-    samples *= GAIN
+def pcm_to_float(
+    raw: bytes,
+    channels: int,
+    selected_channel: int,
+) -> tuple[np.ndarray, list[int]]:
+    frames = np.frombuffer(raw, dtype="<i2").reshape(-1, channels).astype(np.float32)
+    frames /= 32768.0
+    frames *= GAIN
+
+    rms = np.sqrt(np.mean(np.square(frames), axis=0))
+    dbfs = 20.0 * np.log10(np.maximum(rms, 1e-6))
+    levels = np.rint(np.clip((dbfs + 60.0) * (100.0 / 60.0), 0.0, 100.0))
+
+    samples = frames[:, selected_channel].copy()
     np.clip(samples, -1.0, 1.0, out=samples)
-    return samples
+    return samples, levels.astype(int).tolist()
 
 
 def recognize(
@@ -452,7 +479,7 @@ def main() -> int:
         volume=initial_music.volume,
     )
 
-    bytes_per_window = WINDOW_SIZE * 2
+    bytes_per_window = WINDOW_SIZE * 2 * capture.channels
     wake_window_samples = int(WAKE_WINDOW_SECONDS * SAMPLE_RATE)
     wake_min_samples = int(WAKE_MIN_AUDIO_SECONDS * SAMPLE_RATE)
     command_preroll_samples = int(COMMAND_PREROLL_SECONDS * SAMPLE_RATE)
@@ -462,6 +489,7 @@ def main() -> int:
     next_wake_decode = time.monotonic()
     command_deadline: float | None = None
     music_was_playing = False
+    next_mic_level_update = time.monotonic()
 
     print()
     print("================================================")
@@ -488,8 +516,22 @@ def main() -> int:
                 print("Поток микрофона остановился.", file=sys.stderr)
                 break
 
-            samples = pcm_to_float(raw)
+            samples, captured_levels = pcm_to_float(
+                raw,
+                capture.channels,
+                capture.selected_channel,
+            )
             now = time.monotonic()
+
+            if MIC_LEVEL_UPDATE_SECONDS > 0 and now >= next_mic_level_update:
+                if capture.meter_channel is None:
+                    mic_levels = captured_levels
+                else:
+                    mic_levels = [0] * MIC_CHANNELS
+                    if 0 <= capture.meter_channel < MIC_CHANNELS:
+                        mic_levels[capture.meter_channel] = captured_levels[0]
+                edge.patch(mic_levels=mic_levels)
+                next_mic_level_update = now + MIC_LEVEL_UPDATE_SECONDS
 
             if state == "WAIT_WAKE":
                 rolling = append_rolling(rolling, samples, wake_window_samples)
@@ -614,7 +656,7 @@ def main() -> int:
         capture.close()
         if npu_wake is not None:
             npu_wake.close()
-        edge.patch(mic_online=False)
+        edge.patch(mic_online=False, mic_levels=[0] * MIC_CHANNELS)
 
     return 0
 
