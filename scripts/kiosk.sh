@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-MUSIC_URL="${KOT_MUSIC_URL:-https://music.yandex.ru/}"
+MUSIC_URL="${KOT_MUSIC_URL:-https://music.yandex.com/}"
 KOT_URL="${KOT_EDGE_URL:-http://127.0.0.1:8765/}"
 KOT_EDGE_WAIT_SECONDS="${KOT_EDGE_WAIT_SECONDS:-60}"
+MUSIC_WARMUP_SECONDS="${KOT_MUSIC_WARMUP_SECONDS:-10}"
 
 if command -v chromium >/dev/null 2>&1; then
   BROWSER="chromium"
@@ -26,10 +27,24 @@ for ((attempt = 0; attempt < KOT_EDGE_WAIT_SECONDS; attempt++)); do
   sleep 1
 done
 
-exec "$BROWSER" \
+# Start Yandex Music as the foreground tab first. When it is opened immediately
+# in the background, Chromium can defer page/MPRIS initialization indefinitely.
+"$BROWSER" \
   --new-window \
   --start-maximized \
   --no-first-run \
   --disable-session-crashed-bubble \
-  "$MUSIC_URL" \
-  "$KOT_URL"
+  --disable-background-timer-throttling \
+  --disable-renderer-backgrounding \
+  "$MUSIC_URL" &
+
+browser_pid=$!
+sleep "$MUSIC_WARMUP_SECONDS"
+
+# A second invocation uses the existing Chromium profile/window and opens Kot
+# as the active tab. Yandex Music remains initialized in the background.
+"$BROWSER" "$KOT_URL"
+
+# Some Chromium packages keep the first launcher attached, others fork and
+# return immediately. Both behaviours are valid for XDG Autostart.
+wait "$browser_pid" || true
