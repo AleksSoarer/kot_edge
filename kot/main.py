@@ -305,7 +305,7 @@ async def lifespan(_: FastAPI):
                 await task
 
 
-app = FastAPI(title="Kot Edge", version="0.9.0", lifespan=lifespan)
+app = FastAPI(title="Kot Edge", version="0.9.1", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
