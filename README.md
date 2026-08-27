@@ -1,6 +1,6 @@
 # Kot Edge
 
-Текущая версия: **0.10.0**.
+Текущая версия: **0.11.0**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
@@ -50,6 +50,27 @@ KOT_MIC_LEVEL_UPDATE_SECONDS=0.25
 не только амплитудой, но прежде всего разницей времени прихода сигнала. Поэтому
 светодиоды могут уверенно показывать направление даже при почти одинаковых
 шкалах физических микрофонов.
+
+В версии 0.11.0 карта направления 16×16 читается непосредственно из CDC ACM.
+Когда один сектор устойчив несколько кадров подряд, voice-worker отправляет
+MA-USB8 соответствующую команду `0…9/A/B`; аппаратно сформированный сигнал
+появляется в `M6`. После wake направление фиксируется до выполнения команды или
+timeout, чтобы луч не перескочил на музыку либо отражение во время распознавания.
+
+Автонаведение включено по умолчанию. Ориентацию можно подстроить без изменения
+кода:
+
+```bash
+KOT_AUTO_BEAM=1
+KOT_AUTO_BEAM_OFFSET=0
+KOT_AUTO_BEAM_CLOCKWISE=1
+KOT_AUTO_BEAM_STABLE_FRAMES=3
+KOT_AUTO_BEAM_MIN_CONTRAST=12
+```
+
+`KOT_AUTO_BEAM_OFFSET` поворачивает соответствие секторам с шагом 30°.
+Если направление изменяется зеркально, задайте `KOT_AUTO_BEAM_CLOCKWISE=0`.
+В журнале каждое реальное переключение выглядит как `[MIC-BEAM] сектор 3`.
 
 В экспериментальном mono-AEC доступен только его выбранный Pulse-канал, поэтому
 остальные семь шкал будут пустыми. Полный набор работает в штатном `ALSA + SoX`.
@@ -104,7 +125,7 @@ Chromium не должен поднимать старую копию из HTTP-
 Voice-worker использует текущий рабочий тракт:
 
 - MA-USB8: 8 каналов / 48 kHz;
-- beamformed CH6 через SoX `remix 7`;
+- аппаратно сформированный CH6, выбранный после многоканального ресемплинга;
 - mono / 16 kHz;
 - Small Zipformer RU;
 - Silero VAD;
@@ -136,6 +157,11 @@ KOT_DEBUG_WAKE_ASR=0
 KOT_WAKE_BACKEND=asr
 KOT_MIC_LED_DEVICE=/dev/ttyACM0
 KOT_MIC_LED_ON_WAKE=1
+KOT_AUTO_BEAM=1
+KOT_AUTO_BEAM_OFFSET=0
+KOT_AUTO_BEAM_CLOCKWISE=1
+KOT_AUTO_BEAM_STABLE_FRAMES=3
+KOT_AUTO_BEAM_MIN_CONTRAST=12
 KOT_MUSIC_WAKE_MUTE_SECONDS=3.0
 KOT_AEC_ENABLED=0
 KOT_AEC_MONITOR_SOURCE=alsa_output.platform-auge_sound.stereo-fallback.monitor

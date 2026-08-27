@@ -13,6 +13,7 @@ Environment=KOT_VOICE_BASE=/home/khadas/voice-assistant
 Environment=KOT_WAKE_BACKEND=asr
 Environment=KOT_MIC_BEAM_CHANNEL=7
 Environment=KOT_MIC_LED_DEVICE=/dev/ttyACM0
+Environment=KOT_AUTO_BEAM=1
 Environment=KOT_MIC_LED_ON_WAKE=1
 Environment=KOT_MUSIC_WAKE_MUTE_SECONDS=3.0
 Environment=KOT_AEC_ENABLED=0

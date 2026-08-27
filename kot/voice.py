@@ -69,6 +69,11 @@ WAKE_BACKEND = os.getenv("KOT_WAKE_BACKEND", "asr").strip().lower()
 NPU_WAKE_COMMAND = os.getenv("KOT_NPU_WAKE_COMMAND", "").strip()
 MIC_LED_DEVICE = os.getenv("KOT_MIC_LED_DEVICE", "/dev/ttyACM0").strip()
 MIC_LED_ON_WAKE = os.getenv("KOT_MIC_LED_ON_WAKE", "1") == "1"
+AUTO_BEAM_ENABLED = os.getenv("KOT_AUTO_BEAM", "1") == "1"
+AUTO_BEAM_OFFSET = int(os.getenv("KOT_AUTO_BEAM_OFFSET", "0"))
+AUTO_BEAM_CLOCKWISE = os.getenv("KOT_AUTO_BEAM_CLOCKWISE", "1") == "1"
+AUTO_BEAM_STABLE_FRAMES = int(os.getenv("KOT_AUTO_BEAM_STABLE_FRAMES", "3"))
+AUTO_BEAM_MIN_CONTRAST = int(os.getenv("KOT_AUTO_BEAM_MIN_CONTRAST", "12"))
 MUSIC_WAKE_MUTE_SECONDS = float(os.getenv("KOT_MUSIC_WAKE_MUTE_SECONDS", "3.0"))
 
 COMMAND_TIMEOUT_SECONDS = 8.0
@@ -428,7 +433,15 @@ def main() -> int:
 
     edge = EdgeClient()
     music = PlayerController()
-    mic_leds = MicArrayLeds(MIC_LED_DEVICE, enabled=MIC_LED_ON_WAKE)
+    mic_leds = MicArrayLeds(
+        MIC_LED_DEVICE,
+        enabled=MIC_LED_ON_WAKE,
+        auto_beam=AUTO_BEAM_ENABLED,
+        beam_offset=AUTO_BEAM_OFFSET,
+        beam_clockwise=AUTO_BEAM_CLOCKWISE,
+        stable_frames=AUTO_BEAM_STABLE_FRAMES,
+        min_contrast=AUTO_BEAM_MIN_CONTRAST,
+    )
     mic_leds.set_listening(False)
     recognizer = create_recognizer()
     vad = create_vad()
@@ -503,6 +516,7 @@ def main() -> int:
         print(f"AEC mic:      c{AEC_MIC_CHANNEL - 1}")
     print("ASR:          mono / 16000 Hz")
     print(f"Gain:         x{GAIN}")
+    print(f"Auto beam:    {'ON' if AUTO_BEAM_ENABLED else 'OFF'}")
     print('Wake phrase:  "Эй, Кот"')
     print(f"Command wait: {COMMAND_TIMEOUT_SECONDS:.0f} c")
     print()
@@ -522,6 +536,7 @@ def main() -> int:
                 capture.selected_channel,
             )
             now = time.monotonic()
+            mic_leds.poll()
 
             if MIC_LEVEL_UPDATE_SECONDS > 0 and now >= next_mic_level_update:
                 if capture.meter_channel is None:
@@ -651,6 +666,7 @@ def main() -> int:
         print("Остановка...")
     finally:
         mic_leds.set_listening(False)
+        mic_leds.close()
         if state == "ACTIVE" and music_was_playing:
             music.play()
         capture.close()
