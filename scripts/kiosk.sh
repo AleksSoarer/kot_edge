@@ -5,6 +5,7 @@ MUSIC_URL="${KOT_MUSIC_URL:-https://music.yandex.com/}"
 KOT_URL="${KOT_EDGE_URL:-http://127.0.0.1:8765/}"
 KOT_EDGE_WAIT_SECONDS="${KOT_EDGE_WAIT_SECONDS:-60}"
 MUSIC_WARMUP_SECONDS="${KOT_MUSIC_WARMUP_SECONDS:-20}"
+MUSIC_STABILIZE_SECONDS="${KOT_MUSIC_STABILIZE_SECONDS:-3}"
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 MUSIC_EXTENSION_DIR="$SCRIPT_DIR/yandex-music-bootstrap"
 
@@ -56,10 +57,29 @@ for ((attempt = 0; attempt < MUSIC_WARMUP_SECONDS * 4; attempt++)); do
   )"
   if [[ -n "$player_name" ]]; then
     player_status="$(playerctl --player="$player_name" status 2>/dev/null || true)"
-    if [[ "$player_status" == "Playing" || "$player_status" == "Paused" ]]; then
+    player_title="$(
+      playerctl --player="$player_name" metadata --format '{{title}}' 2>/dev/null \
+        || true
+    )"
+    if [[ "$player_status" == "Paused" && -n "$player_title" ]]; then
       player_ready=1
-      playerctl --player="$player_name" pause >/dev/null 2>&1 || true
       break
+    fi
+    if [[ "$player_status" == "Playing" && -n "$player_title" ]]; then
+      # Pausing immediately after MPRIS appears can make Yandex discard the
+      # not-yet-stable queue and return to Stopped. Let the first track settle.
+      sleep "$MUSIC_STABILIZE_SECONDS"
+      playerctl --player="$player_name" pause >/dev/null 2>&1 || true
+      sleep 0.5
+      player_status="$(playerctl --player="$player_name" status 2>/dev/null || true)"
+      player_title="$(
+        playerctl --player="$player_name" metadata --format '{{title}}' 2>/dev/null \
+          || true
+      )"
+      if [[ "$player_status" == "Paused" && -n "$player_title" ]]; then
+        player_ready=1
+        break
+      fi
     fi
   fi
   sleep 0.25
@@ -67,6 +87,8 @@ done
 
 if ((player_ready == 0)); then
   echo "Yandex Music did not prepare a playable MPRIS queue in ${MUSIC_WARMUP_SECONDS}s" >&2
+else
+  echo "Yandex Music ready: $player_title ($player_status)"
 fi
 
 # A second invocation uses the existing Chromium profile/window and opens Kot
