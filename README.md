@@ -1,6 +1,6 @@
 # Kot Edge
 
-Текущая версия: **0.7.3**.
+Текущая версия: **0.8.0**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
@@ -328,6 +328,47 @@ systemctl status kot-edge --no-pager
 systemctl status kot-edge-voice --no-pager
 journalctl -u kot-edge-voice -f
 ```
+
+## Автозапуск браузера
+
+Версия 0.8.0 открывает после входа в графическую сессию одно обычное окно
+Chromium с двумя вкладками в заданном порядке:
+
+1. `https://music.yandex.ru/`;
+2. `http://127.0.0.1:8765/` — интерфейс Кота.
+
+Используется обычный профиль браузера, поэтому сохраняются авторизация в
+Яндекс Музыке и MPRIS-управление через `playerctl`. Скрипт ждёт локальный порт
+Кота до 60 секунд, чтобы при загрузке системы вторая вкладка не открылась со
+страницей ошибки подключения.
+
+Установите XDG Autostart для пользователя `khadas`:
+
+```bash
+cd /home/khadas/kot_edge
+chmod +x scripts/kiosk.sh
+mkdir -p /home/khadas/.config/autostart
+cp scripts/kot-edge-browser.desktop /home/khadas/.config/autostart/
+```
+
+Проверить без перезагрузки можно из терминала, открытого в рабочем столе:
+
+```bash
+/home/khadas/kot_edge/scripts/kiosk.sh
+```
+
+Настройки можно переопределить переменными окружения:
+
+```bash
+KOT_MUSIC_URL=https://music.yandex.ru/
+KOT_EDGE_URL=http://127.0.0.1:8765/
+KOT_EDGE_WAIT_SECONDS=60
+```
+
+Автозапуск срабатывает после автоматического или ручного входа пользователя в
+графическую сессию. Если после включения Khadas остаётся на экране входа, для
+полностью автоматического старта нужно отдельно включить autologin пользователя
+`khadas` в настройках display manager.
 
 ## API
 

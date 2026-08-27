@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Kot Edge Browser
+Comment=Open Yandex Music and Kot Edge after desktop login
+Exec=/home/khadas/kot_edge/scripts/kiosk.sh
+Terminal=false
+X-GNOME-Autostart-enabled=true
