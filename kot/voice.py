@@ -5,6 +5,7 @@ import os
 import subprocess
 import sys
 import time
+import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from urllib.error import URLError
@@ -22,6 +23,7 @@ from .phrases import (
     normalize_text,
     strip_wake_from_command,
 )
+from .recognition_log import RecognitionLogger
 from .ui import (
     ACK_TEXT,
     AUDIO_UNAVAILABLE_TEXT,
@@ -75,6 +77,16 @@ AUTO_BEAM_CLOCKWISE = os.getenv("KOT_AUTO_BEAM_CLOCKWISE", "1") == "1"
 AUTO_BEAM_STABLE_FRAMES = int(os.getenv("KOT_AUTO_BEAM_STABLE_FRAMES", "3"))
 AUTO_BEAM_MIN_CONTRAST = int(os.getenv("KOT_AUTO_BEAM_MIN_CONTRAST", "12"))
 MUSIC_WAKE_MUTE_SECONDS = float(os.getenv("KOT_MUSIC_WAKE_MUTE_SECONDS", "3.0"))
+_RECOGNITION_LOG_VALUE = os.getenv(
+    "KOT_RECOGNITION_LOG",
+    str(Path.home() / "kot-logs" / "recognition.jsonl"),
+).strip()
+RECOGNITION_LOG_PATH = (
+    Path(_RECOGNITION_LOG_VALUE).expanduser() if _RECOGNITION_LOG_VALUE else None
+)
+RECOGNITION_LOG_MAX_BYTES = int(os.getenv("KOT_RECOGNITION_LOG_MAX_BYTES", "10485760"))
+RECOGNITION_LOG_BACKUPS = int(os.getenv("KOT_RECOGNITION_LOG_BACKUPS", "5"))
+RECOGNITION_LOG_MODE = os.getenv("KOT_RECOGNITION_LOG_MODE", "all").strip().lower()
 
 COMMAND_TIMEOUT_SECONDS = 8.0
 COMMAND_TIMEOUT_AFTER_WAKE_ONLY = 8.0
@@ -352,6 +364,9 @@ def process_vad_segments(
     edge: EdgeClient,
     music: PlayerController,
     music_was_playing: bool,
+    recognition_log: RecognitionLogger,
+    interaction_id: str,
+    stream_end_sample: int,
 ) -> tuple[bool, bool]:
     command_done = False
     wake_only_detected = False
@@ -362,19 +377,31 @@ def process_vad_segments(
         duration = len(segment) / SAMPLE_RATE
         text, elapsed, rtf = recognize(recognizer, segment)
         normalized = normalize_text(text)
+        command = strip_wake_from_command(normalized) if normalized else ""
+        probable_wake_only = bool(command) and is_probable_wake_only(command)
+        found, _, after = find_wake(command) if command else (False, "", "")
+        wake_only = not command or probable_wake_only or (found and not after)
+        decision = "empty" if not normalized else "wake_only" if wake_only else "command"
+
+        recognition_log.event(
+            "asr",
+            stage="command",
+            text=text,
+            normalized=normalized,
+            decision=decision,
+            accepted=decision == "command",
+            interaction_id=interaction_id,
+            stream_end_sample=stream_end_sample,
+            audio_seconds=round(duration, 3),
+            decode_seconds=round(elapsed, 3),
+            rtf=round(rtf, 3),
+        )
         if not normalized:
             continue
 
         print(f"[ACTIVE-ASR] {normalized}")
-        command = strip_wake_from_command(normalized)
 
-        if not command or is_probable_wake_only(command):
-            wake_only_detected = True
-            edge.patch(mode="listening", heard_text=normalized)
-            continue
-
-        found, _, after = find_wake(command)
-        if found and not after:
+        if wake_only:
             wake_only_detected = True
             edge.patch(mode="listening", heard_text=normalized)
             continue
@@ -384,6 +411,12 @@ def process_vad_segments(
         print(f"          audio={duration:.2f} c | decode={elapsed:.2f} c | RTF={rtf:.2f}")
         print()
 
+        recognition_log.event(
+            "command",
+            text=command,
+            source_text=normalized,
+            interaction_id=interaction_id,
+        )
         music_result = music.finish_command(command, music_was_playing)
         music_snapshot = music_result.snapshot
 
@@ -477,6 +510,21 @@ def main() -> int:
         print(f"Неизвестный KOT_WAKE_BACKEND: {WAKE_BACKEND}", file=sys.stderr)
         return 1
 
+    recognition_log = RecognitionLogger(
+        RECOGNITION_LOG_PATH,
+        max_bytes=RECOGNITION_LOG_MAX_BYTES,
+        backups=RECOGNITION_LOG_BACKUPS,
+        mode=RECOGNITION_LOG_MODE,
+    )
+    recognition_log.event(
+        "session_start",
+        capture=capture.backend,
+        selected_channel=capture.selected_channel,
+        gain=GAIN,
+        wake_backend=WAKE_BACKEND,
+        auto_beam=AUTO_BEAM_ENABLED,
+    )
+
     assert capture.stream.stdout is not None
     initial_music = music.snapshot()
     edge.patch(
@@ -503,6 +551,8 @@ def main() -> int:
     command_deadline: float | None = None
     music_was_playing = False
     next_mic_level_update = time.monotonic()
+    stream_sample_cursor = 0
+    current_interaction_id: str | None = None
 
     print()
     print("================================================")
@@ -517,6 +567,7 @@ def main() -> int:
     print("ASR:          mono / 16000 Hz")
     print(f"Gain:         x{GAIN}")
     print(f"Auto beam:    {'ON' if AUTO_BEAM_ENABLED else 'OFF'}")
+    print(f"ASR log:      {RECOGNITION_LOG_PATH or 'OFF'} ({RECOGNITION_LOG_MODE})")
     print('Wake phrase:  "Эй, Кот"')
     print(f"Command wait: {COMMAND_TIMEOUT_SECONDS:.0f} c")
     print()
@@ -535,6 +586,7 @@ def main() -> int:
                 capture.channels,
                 capture.selected_channel,
             )
+            stream_sample_cursor += len(samples)
             now = time.monotonic()
             mic_leds.poll()
 
@@ -562,16 +614,44 @@ def main() -> int:
                         score = "" if npu_event.score is None else f" score={npu_event.score:.3f}"
                         normalized = f"эй кот [npu{score}]"
                         found = True
+                        wake_backend = "npu"
                     else:
+                        wake_backend = "asr"
                         next_wake_decode = now + WAKE_DECODE_INTERVAL
-                        text, _, rtf = recognize(recognizer, rolling)
+                        text, elapsed, rtf = recognize(recognizer, rolling)
                         normalized = normalize_text(text)
 
                         if DEBUG_WAKE_ASR and normalized:
                             print(f"[WAKE-ASR] {normalized} (RTF={rtf:.2f})")
 
                         found, _, _ = find_wake(normalized)
+                        if normalized:
+                            recognition_log.event(
+                                "asr",
+                                stage="wake",
+                                text=text,
+                                normalized=normalized,
+                                decision="wake" if found else "rejected",
+                                accepted=found,
+                                stream_start_sample=stream_sample_cursor - len(rolling),
+                                stream_end_sample=stream_sample_cursor,
+                                audio_seconds=round(len(rolling) / SAMPLE_RATE, 3),
+                                decode_seconds=round(elapsed, 3),
+                                rtf=round(rtf, 3),
+                                wake_detected=found,
+                                beam_sector=mic_leds.sector,
+                            )
                     if found:
+                        current_interaction_id = uuid.uuid4().hex
+                        recognition_log.event(
+                            "wake_detected",
+                            backend=wake_backend,
+                            source_text=normalized,
+                            score=npu_event.score if npu_event is not None else None,
+                            beam_sector=mic_leds.sector,
+                            interaction_id=current_interaction_id,
+                            stream_end_sample=stream_sample_cursor,
+                        )
                         # Silence Chromium/Yandex Music before active ASR. The
                         # previous state is remembered so non-music commands and
                         # timeouts can restore playback automatically.
@@ -599,7 +679,14 @@ def main() -> int:
                             pos += WINDOW_SIZE
 
                         command_done, wake_only = process_vad_segments(
-                            vad, recognizer, edge, music, music_was_playing
+                            vad,
+                            recognizer,
+                            edge,
+                            music,
+                            music_was_playing,
+                            recognition_log,
+                            current_interaction_id,
+                            stream_sample_cursor,
                         )
                         if command_done:
                             mic_leds.set_listening(False)
@@ -608,6 +695,7 @@ def main() -> int:
                             rolling = np.empty(0, dtype=np.float32)
                             next_wake_decode = time.monotonic() + WAKE_COOLDOWN_SECONDS
                             music_was_playing = False
+                            current_interaction_id = None
                             print("[WAIT_WAKE] Жду: Эй, Кот")
                             print()
                         elif wake_only:
@@ -620,7 +708,14 @@ def main() -> int:
 
             vad.accept_waveform(samples)
             command_done, wake_only = process_vad_segments(
-                vad, recognizer, edge, music, music_was_playing
+                vad,
+                recognizer,
+                edge,
+                music,
+                music_was_playing,
+                recognition_log,
+                current_interaction_id or "",
+                stream_sample_cursor,
             )
 
             if wake_only:
@@ -633,6 +728,7 @@ def main() -> int:
                 rolling = np.empty(0, dtype=np.float32)
                 next_wake_decode = time.monotonic() + WAKE_COOLDOWN_SECONDS
                 music_was_playing = False
+                current_interaction_id = None
                 print("[WAIT_WAKE] Жду: Эй, Кот")
                 print()
                 continue
@@ -642,6 +738,12 @@ def main() -> int:
                 print("[TIMEOUT] Команда не получена.")
                 print("[WAIT_WAKE] Жду: Эй, Кот")
                 print()
+                recognition_log.event(
+                    "timeout",
+                    stage="command",
+                    interaction_id=current_interaction_id,
+                    stream_end_sample=stream_sample_cursor,
+                )
                 music_snapshot = music.resume_after_timeout(music_was_playing)
                 mic_leds.set_listening(False)
                 edge.patch(
@@ -660,6 +762,7 @@ def main() -> int:
                 next_wake_decode = time.monotonic() + WAKE_COOLDOWN_SECONDS
                 command_deadline = None
                 music_was_playing = False
+                current_interaction_id = None
 
     except KeyboardInterrupt:
         print()
@@ -667,6 +770,8 @@ def main() -> int:
     finally:
         mic_leds.set_listening(False)
         mic_leds.close()
+        recognition_log.event("session_stop")
+        recognition_log.close()
         if state == "ACTIVE" and music_was_playing:
             music.play()
         capture.close()
