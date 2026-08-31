@@ -43,6 +43,7 @@ MIC_DEVICE = os.getenv("KOT_MIC_DEVICE", "hw:MicArray,0")
 MIC_SAMPLE_RATE = 48000
 MIC_CHANNELS = 8
 SOX_BEAM_CHANNEL = int(os.getenv("KOT_MIC_BEAM_CHANNEL", "7"))
+WAKE_INPUT_CHANNEL = int(os.getenv("KOT_WAKE_CHANNEL", "8"))
 SAMPLE_RATE = 16000
 GAIN = float(os.getenv("KOT_MIC_GAIN", "16.0"))
 MIC_LEVEL_UPDATE_SECONDS = float(os.getenv("KOT_MIC_LEVEL_UPDATE_SECONDS", "0.25"))
@@ -76,6 +77,12 @@ AUTO_BEAM_OFFSET = int(os.getenv("KOT_AUTO_BEAM_OFFSET", "0"))
 AUTO_BEAM_CLOCKWISE = os.getenv("KOT_AUTO_BEAM_CLOCKWISE", "1") == "1"
 AUTO_BEAM_STABLE_FRAMES = int(os.getenv("KOT_AUTO_BEAM_STABLE_FRAMES", "3"))
 AUTO_BEAM_MIN_CONTRAST = int(os.getenv("KOT_AUTO_BEAM_MIN_CONTRAST", "12"))
+AUTO_BEAM_NO_FRAME_WARNING_SECONDS = float(
+    os.getenv("KOT_AUTO_BEAM_NO_FRAME_WARNING_SECONDS", "5.0")
+)
+AUTO_BEAM_DIAGNOSTIC_SECONDS = float(
+    os.getenv("KOT_AUTO_BEAM_DIAGNOSTIC_SECONDS", "15.0")
+)
 MUSIC_WAKE_MUTE_SECONDS = float(os.getenv("KOT_MUSIC_WAKE_MUTE_SECONDS", "3.0"))
 _RECOGNITION_LOG_VALUE = os.getenv(
     "KOT_RECOGNITION_LOG",
@@ -179,7 +186,20 @@ class CapturePipeline:
     backend: str
     channels: int
     selected_channel: int
+    wake_channel: int
     meter_channel: int | None = None
+
+    @property
+    def command_source_channel(self) -> int:
+        if self.channels == 1 and self.meter_channel is not None:
+            return self.meter_channel
+        return self.selected_channel
+
+    @property
+    def wake_source_channel(self) -> int:
+        if self.channels == 1 and self.meter_channel is not None:
+            return self.meter_channel
+        return self.wake_channel
 
     def close(self) -> None:
         for process in reversed(self.processes):
@@ -209,14 +229,18 @@ def start_aec_capture() -> CapturePipeline:
         "Pulse monitor + FFmpeg NLMS",
         channels=1,
         selected_channel=0,
+        wake_channel=0,
         meter_channel=AEC_MIC_CHANNEL - 1,
     )
 
 
 def start_legacy_capture() -> CapturePipeline:
     selected_channel = SOX_BEAM_CHANNEL - 1
+    wake_channel = WAKE_INPUT_CHANNEL - 1
     if not 0 <= selected_channel < MIC_CHANNELS:
         raise ValueError(f"KOT_MIC_BEAM_CHANNEL должен быть от 1 до {MIC_CHANNELS}")
+    if not 0 <= wake_channel < MIC_CHANNELS:
+        raise ValueError(f"KOT_WAKE_CHANNEL должен быть от 1 до {MIC_CHANNELS}")
 
     arecord_cmd = [
         "arecord",
@@ -275,6 +299,7 @@ def start_legacy_capture() -> CapturePipeline:
         "ALSA + SoX",
         channels=MIC_CHANNELS,
         selected_channel=selected_channel,
+        wake_channel=wake_channel,
     )
 
 
@@ -316,7 +341,8 @@ def pcm_to_float(
     raw: bytes,
     channels: int,
     selected_channel: int,
-) -> tuple[np.ndarray, list[int]]:
+    wake_channel: int,
+) -> tuple[np.ndarray, np.ndarray, list[int]]:
     frames = np.frombuffer(raw, dtype="<i2").reshape(-1, channels).astype(np.float32)
     frames /= 32768.0
     frames *= GAIN
@@ -327,7 +353,12 @@ def pcm_to_float(
 
     samples = frames[:, selected_channel].copy()
     np.clip(samples, -1.0, 1.0, out=samples)
-    return samples, levels.astype(int).tolist()
+    if wake_channel == selected_channel:
+        wake_samples = samples
+    else:
+        wake_samples = frames[:, wake_channel].copy()
+        np.clip(wake_samples, -1.0, 1.0, out=wake_samples)
+    return samples, wake_samples, levels.astype(int).tolist()
 
 
 def recognize(
@@ -346,6 +377,16 @@ def recognize(
     text = stream.result.text.strip()
     rtf = elapsed / duration if duration > 0 else 0.0
     return text, elapsed, rtf
+
+
+def signal_metrics(samples: np.ndarray) -> tuple[float, float]:
+    if samples.size == 0:
+        return -120.0, -120.0
+    rms = float(np.sqrt(np.mean(np.square(samples))))
+    peak = float(np.max(np.abs(samples)))
+    rms_dbfs = 20.0 * np.log10(max(rms, 1e-6))
+    peak_dbfs = 20.0 * np.log10(max(peak, 1e-6))
+    return round(rms_dbfs, 2), round(peak_dbfs, 2)
 
 
 def append_rolling(buffer: np.ndarray, samples: np.ndarray, max_samples: int) -> np.ndarray:
@@ -367,6 +408,8 @@ def process_vad_segments(
     recognition_log: RecognitionLogger,
     interaction_id: str,
     stream_end_sample: int,
+    input_channel: int,
+    beam_sector: int | None,
 ) -> tuple[bool, bool]:
     command_done = False
     wake_only_detected = False
@@ -382,6 +425,7 @@ def process_vad_segments(
         found, _, after = find_wake(command) if command else (False, "", "")
         wake_only = not command or probable_wake_only or (found and not after)
         decision = "empty" if not normalized else "wake_only" if wake_only else "command"
+        rms_dbfs, peak_dbfs = signal_metrics(segment)
 
         recognition_log.event(
             "asr",
@@ -395,6 +439,10 @@ def process_vad_segments(
             audio_seconds=round(duration, 3),
             decode_seconds=round(elapsed, 3),
             rtf=round(rtf, 3),
+            rms_dbfs=rms_dbfs,
+            peak_dbfs=peak_dbfs,
+            input_channel=input_channel,
+            beam_sector=beam_sector,
         )
         if not normalized:
             continue
@@ -416,6 +464,8 @@ def process_vad_segments(
             text=command,
             source_text=normalized,
             interaction_id=interaction_id,
+            input_channel=input_channel,
+            beam_sector=beam_sector,
         )
         music_result = music.finish_command(command, music_was_playing)
         music_snapshot = music_result.snapshot
@@ -474,6 +524,7 @@ def main() -> int:
         beam_clockwise=AUTO_BEAM_CLOCKWISE,
         stable_frames=AUTO_BEAM_STABLE_FRAMES,
         min_contrast=AUTO_BEAM_MIN_CONTRAST,
+        no_frame_warning_seconds=AUTO_BEAM_NO_FRAME_WARNING_SECONDS,
     )
     mic_leds.set_listening(False)
     recognizer = create_recognizer()
@@ -519,10 +570,17 @@ def main() -> int:
     recognition_log.event(
         "session_start",
         capture=capture.backend,
-        selected_channel=capture.selected_channel,
+        selected_channel=capture.command_source_channel,
+        wake_channel=capture.wake_source_channel,
+        stream_selected_channel=capture.selected_channel,
+        stream_wake_channel=capture.wake_channel,
         gain=GAIN,
         wake_backend=WAKE_BACKEND,
         auto_beam=AUTO_BEAM_ENABLED,
+        auto_beam_offset=AUTO_BEAM_OFFSET,
+        auto_beam_clockwise=AUTO_BEAM_CLOCKWISE,
+        auto_beam_stable_frames=AUTO_BEAM_STABLE_FRAMES,
+        auto_beam_min_contrast=AUTO_BEAM_MIN_CONTRAST,
     )
 
     assert capture.stream.stdout is not None
@@ -545,12 +603,14 @@ def main() -> int:
     wake_min_samples = int(WAKE_MIN_AUDIO_SECONDS * SAMPLE_RATE)
     command_preroll_samples = int(COMMAND_PREROLL_SECONDS * SAMPLE_RATE)
 
-    rolling = np.empty(0, dtype=np.float32)
+    wake_rolling = np.empty(0, dtype=np.float32)
+    command_rolling = np.empty(0, dtype=np.float32)
     state = "WAIT_WAKE"
     next_wake_decode = time.monotonic()
     command_deadline: float | None = None
     music_was_playing = False
     next_mic_level_update = time.monotonic()
+    next_beam_diagnostic = time.monotonic() + AUTO_BEAM_DIAGNOSTIC_SECONDS
     stream_sample_cursor = 0
     current_interaction_id: str | None = None
 
@@ -561,12 +621,23 @@ def main() -> int:
     print(f"Микрофон:     {MIC_DEVICE}")
     print("Вход:         8 ch / 48000 Hz")
     print(f"Beam:         CH{SOX_BEAM_CHANNEL - 1}")
+    if capture.channels > 1:
+        print(f"Wake input:   CH{capture.wake_channel}")
+    else:
+        print("Wake input:   AEC mono")
     print(f"Capture:      {capture.backend}")
     if capture.backend == "Pulse monitor + FFmpeg NLMS":
         print(f"AEC mic:      c{AEC_MIC_CHANNEL - 1}")
     print("ASR:          mono / 16000 Hz")
     print(f"Gain:         x{GAIN}")
     print(f"Auto beam:    {'ON' if AUTO_BEAM_ENABLED else 'OFF'}")
+    if AUTO_BEAM_ENABLED:
+        beam_diagnostic = (
+            f"every {AUTO_BEAM_DIAGNOSTIC_SECONDS:g} c"
+            if AUTO_BEAM_DIAGNOSTIC_SECONDS > 0
+            else "OFF"
+        )
+        print(f"Beam diag:    {beam_diagnostic}")
     print(f"ASR log:      {RECOGNITION_LOG_PATH or 'OFF'} ({RECOGNITION_LOG_MODE})")
     print('Wake phrase:  "Эй, Кот"')
     print(f"Command wait: {COMMAND_TIMEOUT_SECONDS:.0f} c")
@@ -581,14 +652,25 @@ def main() -> int:
                 print("Поток микрофона остановился.", file=sys.stderr)
                 break
 
-            samples, captured_levels = pcm_to_float(
+            samples, wake_samples, captured_levels = pcm_to_float(
                 raw,
                 capture.channels,
                 capture.selected_channel,
+                capture.wake_channel,
             )
             stream_sample_cursor += len(samples)
             now = time.monotonic()
             mic_leds.poll()
+
+            if (
+                AUTO_BEAM_ENABLED
+                and AUTO_BEAM_DIAGNOSTIC_SECONDS > 0
+                and now >= next_beam_diagnostic
+            ):
+                diagnostics = mic_leds.diagnostics(now)
+                print(f"[MIC-DIAG] {mic_leds.diagnostic_summary(now)}")
+                recognition_log.event("beam_diagnostic", **diagnostics)
+                next_beam_diagnostic = now + AUTO_BEAM_DIAGNOSTIC_SECONDS
 
             if MIC_LEVEL_UPDATE_SECONDS > 0 and now >= next_mic_level_update:
                 if capture.meter_channel is None:
@@ -601,12 +683,23 @@ def main() -> int:
                 next_mic_level_update = now + MIC_LEVEL_UPDATE_SECONDS
 
             if state == "WAIT_WAKE":
-                rolling = append_rolling(rolling, samples, wake_window_samples)
+                wake_rolling = append_rolling(
+                    wake_rolling,
+                    wake_samples,
+                    wake_window_samples,
+                )
+                command_rolling = append_rolling(
+                    command_rolling,
+                    samples,
+                    command_preroll_samples,
+                )
 
-                npu_event = npu_wake.accept(samples) if npu_wake is not None else None
+                npu_event = (
+                    npu_wake.accept(wake_samples) if npu_wake is not None else None
+                )
                 run_asr_wake = (
                     npu_wake is None
-                    and len(rolling) >= wake_min_samples
+                    and len(wake_rolling) >= wake_min_samples
                     and now >= next_wake_decode
                 )
                 if (npu_event is not None and npu_event.detected) or run_asr_wake:
@@ -618,7 +711,7 @@ def main() -> int:
                     else:
                         wake_backend = "asr"
                         next_wake_decode = now + WAKE_DECODE_INTERVAL
-                        text, elapsed, rtf = recognize(recognizer, rolling)
+                        text, elapsed, rtf = recognize(recognizer, wake_rolling)
                         normalized = normalize_text(text)
 
                         if DEBUG_WAKE_ASR and normalized:
@@ -626,6 +719,7 @@ def main() -> int:
 
                         found, _, _ = find_wake(normalized)
                         if normalized:
+                            rms_dbfs, peak_dbfs = signal_metrics(wake_rolling)
                             recognition_log.event(
                                 "asr",
                                 stage="wake",
@@ -633,13 +727,21 @@ def main() -> int:
                                 normalized=normalized,
                                 decision="wake" if found else "rejected",
                                 accepted=found,
-                                stream_start_sample=stream_sample_cursor - len(rolling),
+                                stream_start_sample=(
+                                    stream_sample_cursor - len(wake_rolling)
+                                ),
                                 stream_end_sample=stream_sample_cursor,
-                                audio_seconds=round(len(rolling) / SAMPLE_RATE, 3),
+                                audio_seconds=round(
+                                    len(wake_rolling) / SAMPLE_RATE,
+                                    3,
+                                ),
                                 decode_seconds=round(elapsed, 3),
                                 rtf=round(rtf, 3),
                                 wake_detected=found,
                                 beam_sector=mic_leds.sector,
+                                input_channel=capture.wake_source_channel,
+                                rms_dbfs=rms_dbfs,
+                                peak_dbfs=peak_dbfs,
                             )
                     if found:
                         current_interaction_id = uuid.uuid4().hex
@@ -649,6 +751,7 @@ def main() -> int:
                             source_text=normalized,
                             score=npu_event.score if npu_event is not None else None,
                             beam_sector=mic_leds.sector,
+                            input_channel=capture.wake_source_channel,
                             interaction_id=current_interaction_id,
                             stream_end_sample=stream_sample_cursor,
                         )
@@ -672,7 +775,7 @@ def main() -> int:
                         command_deadline = time.monotonic() + COMMAND_TIMEOUT_SECONDS
                         vad = reset_vad(vad)
 
-                        preroll = rolling[-command_preroll_samples:].copy()
+                        preroll = command_rolling[-command_preroll_samples:].copy()
                         pos = 0
                         while pos + WINDOW_SIZE <= len(preroll):
                             vad.accept_waveform(preroll[pos : pos + WINDOW_SIZE])
@@ -687,12 +790,15 @@ def main() -> int:
                             recognition_log,
                             current_interaction_id,
                             stream_sample_cursor,
+                            capture.command_source_channel,
+                            mic_leds.sector,
                         )
                         if command_done:
                             mic_leds.set_listening(False)
                             state = "WAIT_WAKE"
                             vad = reset_vad(vad)
-                            rolling = np.empty(0, dtype=np.float32)
+                            wake_rolling = np.empty(0, dtype=np.float32)
+                            command_rolling = np.empty(0, dtype=np.float32)
                             next_wake_decode = time.monotonic() + WAKE_COOLDOWN_SECONDS
                             music_was_playing = False
                             current_interaction_id = None
@@ -716,6 +822,8 @@ def main() -> int:
                 recognition_log,
                 current_interaction_id or "",
                 stream_sample_cursor,
+                capture.command_source_channel,
+                mic_leds.sector,
             )
 
             if wake_only:
@@ -725,7 +833,8 @@ def main() -> int:
                 mic_leds.set_listening(False)
                 state = "WAIT_WAKE"
                 vad = reset_vad(vad)
-                rolling = np.empty(0, dtype=np.float32)
+                wake_rolling = np.empty(0, dtype=np.float32)
+                command_rolling = np.empty(0, dtype=np.float32)
                 next_wake_decode = time.monotonic() + WAKE_COOLDOWN_SECONDS
                 music_was_playing = False
                 current_interaction_id = None
@@ -743,6 +852,8 @@ def main() -> int:
                     stage="command",
                     interaction_id=current_interaction_id,
                     stream_end_sample=stream_sample_cursor,
+                    input_channel=capture.command_source_channel,
+                    beam_sector=mic_leds.sector,
                 )
                 music_snapshot = music.resume_after_timeout(music_was_playing)
                 mic_leds.set_listening(False)
@@ -758,7 +869,8 @@ def main() -> int:
                 )
                 state = "WAIT_WAKE"
                 vad = reset_vad(vad)
-                rolling = np.empty(0, dtype=np.float32)
+                wake_rolling = np.empty(0, dtype=np.float32)
+                command_rolling = np.empty(0, dtype=np.float32)
                 next_wake_decode = time.monotonic() + WAKE_COOLDOWN_SECONDS
                 command_deadline = None
                 music_was_playing = False

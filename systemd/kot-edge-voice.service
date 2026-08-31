@@ -15,8 +15,11 @@ Environment=KOT_EDGE_URL=http://127.0.0.1:8765
 Environment=KOT_VOICE_BASE=/home/khadas/voice-assistant
 Environment=KOT_WAKE_BACKEND=asr
 Environment=KOT_MIC_BEAM_CHANNEL=7
+Environment=KOT_WAKE_CHANNEL=8
 Environment=KOT_MIC_LED_DEVICE=/dev/ttyACM0
 Environment=KOT_AUTO_BEAM=1
+Environment=KOT_AUTO_BEAM_NO_FRAME_WARNING_SECONDS=5.0
+Environment=KOT_AUTO_BEAM_DIAGNOSTIC_SECONDS=15.0
 Environment=KOT_MIC_LED_ON_WAKE=1
 Environment=KOT_RECOGNITION_LOG=/var/log/kot-edge/recognition.jsonl
 Environment=KOT_RECOGNITION_LOG_MAX_BYTES=10485760

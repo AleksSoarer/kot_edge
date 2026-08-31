@@ -1,22 +1,44 @@
 # Kot Edge
 
-Текущая версия: **0.12.0**.
+Текущая версия: **0.13.0**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
-В версии 0.12.0 результаты распознавания сохраняются в ротационный JSONL-журнал:
+Версия 0.13.0 подготовлена для проверки всего микрофонного тракта:
+
+- wake-word по умолчанию распознаётся с ненаправленного сырого `CH7`, а после
+  активации команда — с аппаратно сформированного `CH6`;
+- `kot-mic-calibrate circle` управляет фиксированным лучом и записывает круговой
+  тест по 12 направлениям, а `summarize` сравнивает все каналы и aligned/opposite
+  варианты `CH6`;
+- многоканальный WAV можно разложить на восемь mono-файлов командой `split`;
+- hotmap сообщает отсутствие кадров, применяет устойчивое голосование по направлению
+  и периодически пишет фактическое состояние beamforming в журнал;
+- `kot-recognition-report` строит сводку распознанных фраз, timeout, направлений и
+  использованных каналов.
+
+Результаты распознавания сохраняются в ротационный JSONL-журнал:
 
 ```text
 /var/log/kot-edge/recognition.jsonl
 ```
 
 Каждая строка — отдельное JSON-событие. Для ASR сохраняются стадия `wake` или
-`command`, исходный и нормализованный текст, длительность аудио, время декодирования,
-RTF, результат проверки wake-фразы и текущий beam-сектор. Также записываются начало
-и завершение сессии, принятая команда и timeout. Посмотреть журнал в реальном времени:
+`command`, исходный и нормализованный текст, входной канал, RMS/peak, длительность
+аудио, время декодирования, RTF, результат проверки wake-фразы и текущий beam-сектор.
+Также записываются начало и завершение сессии, принятая команда, timeout и состояние
+hotmap. Посмотреть журнал в реальном времени:
 
 ```bash
 sudo tail -f /var/log/kot-edge/recognition.jsonl
+```
+
+Краткая сводка текущего файла и всех его ротаций:
+
+```bash
+cd ~/kot_edge
+.venv/bin/kot-recognition-report /var/log/kot-edge/recognition.jsonl
+.venv/bin/kot-recognition-report /var/log/kot-edge/recognition.jsonl --json
 ```
 
 По умолчанию текущий файл ограничен 10 MiB и хранится пять предыдущих файлов
@@ -55,9 +77,9 @@ KOT_SYSTEM_MONITOR_INTERVAL=2.0
 
 В версии 0.10.0 под мордочкой, рядом с панелью трека, добавлены восемь
 фиксированных индикаторов `M0…M7`. Voice-worker получает от SoX все каналы
-массива после ресемплинга, вычисляет их RMS с учётом текущего `KOT_MIC_GAIN`,
-но в VAD/ASR по-прежнему отправляет только выбранный
-`KOT_MIC_BEAM_CHANNEL`:
+массива после ресемплинга и вычисляет их RMS с учётом текущего `KOT_MIC_GAIN`.
+В ожидании wake ASR получает `KOT_WAKE_CHANNEL`, а после активации VAD/ASR команды
+получает `KOT_MIC_BEAM_CHANNEL`:
 
 ```text
 M0:|||||___
@@ -99,11 +121,18 @@ KOT_AUTO_BEAM_OFFSET=0
 KOT_AUTO_BEAM_CLOCKWISE=1
 KOT_AUTO_BEAM_STABLE_FRAMES=3
 KOT_AUTO_BEAM_MIN_CONTRAST=12
+KOT_AUTO_BEAM_NO_FRAME_WARNING_SECONDS=5.0
+KOT_AUTO_BEAM_DIAGNOSTIC_SECONDS=15.0
 ```
 
 `KOT_AUTO_BEAM_OFFSET` поворачивает соответствие секторам с шагом 30°.
 Если направление изменяется зеркально, задайте `KOT_AUTO_BEAM_CLOCKWISE=0`.
 В журнале каждое реальное переключение выглядит как `[MIC-BEAM] сектор 3`.
+Голосование допускает один выброс в окне из трёх кадров. Если CDC-порт открыт,
+но hotmap не приходит 5 секунд, появляется явное предупреждение. Строка
+`[MIC-DIAG]` и JSON-событие `beam_diagnostic` раз в 15 секунд показывают число
+кадров, возраст последнего кадра, contrast, candidate, voted и реально отправленный
+сектор. Диагностический интервал `0` отключает периодическую запись.
 
 В экспериментальном mono-AEC доступен только его выбранный Pulse-канал, поэтому
 остальные семь шкал будут пустыми. Полный набор работает в штатном `ALSA + SoX`.
@@ -116,6 +145,10 @@ KOT_AUTO_BEAM_MIN_CONTRAST=12
 │   ├── main.py          # FastAPI + состояние + WebSocket
 │   ├── ui.py            # единый источник динамического UI-текста и мордочек
 │   ├── voice.py         # MA-USB8 -> wake word -> VAD -> ASR
+│   ├── mic_led.py       # CDC hotmap, LED-индикация и управление CH6
+│   ├── calibrate.py     # запись, split и круговой анализ каналов
+│   ├── recognition_log.py
+│   ├── recognition_report.py
 │   ├── music.py         # playerctl/MPRIS: playback, metadata, volume
 │   └── static/
 │       ├── index.html
@@ -155,14 +188,23 @@ Chromium не должен поднимать старую копию из HTTP-
 
 ## Wake word
 
-Voice-worker использует текущий рабочий тракт:
+Voice-worker использует два входа одного синхронного 8-канального потока:
 
 - MA-USB8: 8 каналов / 48 kHz;
-- аппаратно сформированный CH6, выбранный после многоканального ресемплинга;
+- дополнительный сырой `CH7` для постоянного поиска wake-word без ещё не
+  настроенного CH6;
+- аппаратно сформированный `CH6` для команды после того, как hotmap выбрал и
+  зафиксировал направление;
 - mono / 16 kHz;
 - Small Zipformer RU;
 - Silero VAD;
 - wake phrase `Эй, Кот` плюс фонетические варианты `эй код`, `ей кот`, `ей код`.
+
+Переменные каналов используют нумерацию SoX от 1 до 8: значение
+`KOT_WAKE_CHANNEL=8` означает физический поток `CH7`, а
+`KOT_MIC_BEAM_CHANNEL=7` — `CH6`. Это тестовая конфигурация. Для прямого A/B с
+прежним трактом задайте `KOT_WAKE_CHANNEL=7`, тогда и wake, и команда используют
+CH6; JSON-журнал явно сохраняет фактический маршрут.
 
 После wake-фразы распознанный текст показывается под мордочкой. После успешной
 команды сервер показывает справа `Мяу, щас!` примерно 2.3 секунды. Время жизни и
@@ -184,6 +226,7 @@ KOT_REPLY_SECONDS=2.3
 KOT_HEARD_SECONDS=12
 KOT_MIC_DEVICE=hw:MicArray,0
 KOT_MIC_BEAM_CHANNEL=7
+KOT_WAKE_CHANNEL=8
 KOT_MIC_GAIN=16.0
 KOT_ASR_THREADS=2
 KOT_DEBUG_WAKE_ASR=0
@@ -195,6 +238,8 @@ KOT_AUTO_BEAM_OFFSET=0
 KOT_AUTO_BEAM_CLOCKWISE=1
 KOT_AUTO_BEAM_STABLE_FRAMES=3
 KOT_AUTO_BEAM_MIN_CONTRAST=12
+KOT_AUTO_BEAM_NO_FRAME_WARNING_SECONDS=5.0
+KOT_AUTO_BEAM_DIAGNOSTIC_SECONDS=15.0
 KOT_MUSIC_WAKE_MUTE_SECONDS=3.0
 KOT_AEC_ENABLED=0
 KOT_AEC_MONITOR_SOURCE=alsa_output.platform-auge_sound.stereo-fallback.monitor
@@ -238,15 +283,17 @@ sudo reboot
 
 ## Калибровка MA-USB8
 
-В версии 0.6.0 добавлена команда `kot-mic-calibrate`. Она пишет исходный
-8-канальный WAV без `KOT_MIC_GAIN` и показывает RMS, peak и долю клиппинга для
-каждого канала. У MA-USB8 каналы CH0–CH5 сырые, CH6 — результат аппаратного
-beamforming, CH7 — дополнительный сырой канал.
+`kot-mic-calibrate` пишет исходный 8-канальный WAV без `KOT_MIC_GAIN` и показывает
+RMS, peak, долю клиппинга и грубое отношение участка речи к начальному участку
+шума для каждого канала. У MA-USB8 каналы CH0–CH5 сырые, CH6 — результат
+аппаратного beamforming, CH7 — дополнительный сырой канал. Это соответствует
+[официальной карте каналов MA-USB8](https://wiki.sipeed.com/hardware/en/modules/micarray_usbboard_bl616.html#product-overview).
 
 Остановите voice-worker, чтобы он не удерживал ALSA-устройство:
 
 ```bash
 sudo systemctl stop kot-edge-voice
+cd ~/kot_edge
 mkdir -p ~/kot-mic-tests
 ```
 
@@ -257,32 +304,58 @@ arecord -l
 arecord --dump-hw-params -D hw:MicArray,0 /dev/null
 ```
 
-Сделайте четыре записи по 15 секунд. В каждой сначала оставьте 3 секунды
-тишины, затем несколько раз обычным голосом произнесите «Эй, Кот, который час»:
+Для одного контрольного файла первые 3 секунды молчите, затем несколько раз
+обычным голосом произнесите одинаковую фразу, например «Эй, Кот, включи музыку»:
 
 ```bash
-kot-mic-calibrate record ~/kot-mic-tests/01-near.wav --seconds 15
-kot-mic-calibrate record ~/kot-mic-tests/02-far.wav --seconds 15
-kot-mic-calibrate record ~/kot-mic-tests/03-side.wav --seconds 15
-# Перед последней записью включите музыку с обычной громкостью.
-kot-mic-calibrate record ~/kot-mic-tests/04-music.wav --seconds 15
+.venv/bin/kot-mic-calibrate record ~/kot-mic-tests/control.wav \
+  --seconds 15 --noise-seconds 3 --distance-m 1.0 --beam 0
 ```
 
-`near` записывается с 0,5 м, `far` — с обычного места пользователя, `side` —
-сбоку от массива. Команда сразу печатает отчёт; существующий файл можно
-проанализировать повторно:
+Команда `--beam` сначала отправляет массиву фиксированный сектор `0…9/A/B` и ждёт
+0,3 секунды стабилизации перед запуском `arecord`. Интервал можно изменить через
+`--beam-settle-seconds`. Рядом с WAV создаётся `control.wav.json` с временем,
+устройством, gain, beam, положением, расстоянием и параметрами записи. Существующий
+файл можно анализировать повторно или разложить на mono-файлы для прослушивания:
 
 ```bash
-kot-mic-calibrate analyze ~/kot-mic-tests/04-music.wav
+.venv/bin/kot-mic-calibrate analyze ~/kot-mic-tests/control.wav
+.venv/bin/kot-mic-calibrate split ~/kot-mic-tests/control.wav
 ```
 
-Отчёт показывает и сырой сигнал, и результат после текущего программного
+### Круговой тест raw-каналов и CH6
+
+Не ходите во время самой записи. Если смотреть на лицевую сторону массива и
+держать разъём/плоский край снизу, штатные `0°` направлены к MIC0 сверху, а
+секторы идут по часовой стрелке. Зафиксируйте эту ориентацию корпуса, вставайте
+в указанную точку, нажимайте Enter и оставайтесь неподвижно.
+Первые 3 секунды каждой записи молчите, затем одинаково произносите тестовую
+фразу. Ориентируйтесь на номер позиции в каждом приглашении: с `--opposite` для
+одной точки подряд будут два файла, поэтому между ними перемещаться не нужно.
+Второй файл пишет CH6 с лучом, развёрнутым на 180°, и даёт прямую контрольную пару:
+
+```bash
+.venv/bin/kot-mic-calibrate circle ~/kot-mic-tests/circle-01 \
+  --seconds 12 --noise-seconds 3 --distance-m 1.0 --opposite
+
+.venv/bin/kot-mic-calibrate summarize ~/kot-mic-tests/circle-01
+```
+
+Получится 24 восьмиканальных WAV: 12 `aligned` и 12 `opposite`. Положительная
+`delta` в итоговой таблице означает, что CH6 с лучом на говорящего лучше
+противоположного луча. Если нулевой сектор корпуса не совпадает с командой массива,
+используйте `--beam-offset N`; если порядок идёт зеркально — `--counterclockwise`.
+Эти параметры должны затем совпасть с `KOT_AUTO_BEAM_OFFSET` и
+`KOT_AUTO_BEAM_CLOCKWISE`.
+
+Отчёт показывает сырой сигнал, грубый SNR и результат после текущего программного
 `gain x16`. Ориентиры для обработанной речи: peak примерно от -12 до -3 dBFS,
 отсутствие клиппинга и заметный рост RMS относительно первых секунд тишины.
 Если клиппинг есть только после gain, уменьшите `KOT_MIC_GAIN`; если он уже есть
 в сыром сигнале, нужно уменьшить аппаратный capture gain. Сравните прежде всего
-CH6 с тем сырым каналом CH0–CH5, который обращён к пользователю. Другой gain
-можно проверить без новой записи: `kot-mic-calibrate analyze FILE --gain 4`.
+CH6 с сырыми CH0–CH5 и дополнительным сырым CH7. Другой gain
+можно проверить без новой записи:
+`.venv/bin/kot-mic-calibrate analyze FILE --gain 4`.
 
 После записи верните службу:
 
@@ -409,6 +482,18 @@ cd /home/khadas/kot_edge
 python3 -m venv .venv
 .venv/bin/python -m pip install -U pip
 .venv/bin/python -m pip install -e '.[voice]'
+```
+
+При обновлении существующей установки повторите editable install: он создаст
+новую команду `kot-recognition-report`. Затем установите обновлённый unit:
+
+```bash
+cd /home/khadas/kot_edge
+git pull
+.venv/bin/python -m pip install -e '.[voice]'
+sudo cp systemd/kot-edge-voice.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl restart kot-edge kot-edge-voice
 ```
 
 Ручной запуск web UI:
