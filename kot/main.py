@@ -11,6 +11,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field
 
+from . import __version__
 from .music import MusicSnapshot, PlayerController
 from .system_stats import SystemMonitor, SystemSnapshot
 from .ui import MODE_UI, Mode
@@ -307,7 +308,7 @@ async def lifespan(_: FastAPI):
                 await task
 
 
-app = FastAPI(title="Kot Edge", version="0.13.0", lifespan=lifespan)
+app = FastAPI(title="Kot Edge", version=__version__, lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 

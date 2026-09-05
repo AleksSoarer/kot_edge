@@ -207,6 +207,7 @@ def write_metadata(
     distance_m: float | None,
     noise_seconds: float,
     beam_settle_seconds: float,
+    extra: dict[str, object] | None = None,
 ) -> Path:
     sidecar = metadata_path(output)
     payload = {
@@ -220,6 +221,8 @@ def write_metadata(
         "noise_seconds": noise_seconds,
         "beam_settle_seconds": beam_settle_seconds,
     }
+    if extra:
+        payload.update(extra)
     sidecar.write_text(
         json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         encoding="utf-8",
@@ -578,6 +581,72 @@ def build_parser() -> argparse.ArgumentParser:
     )
     summary_parser.add_argument("input_dir", type=Path)
     summary_parser.add_argument("--noise-seconds", type=positive_float)
+
+    sweep_parser = subparsers.add_parser(
+        "sweep",
+        help="автоматически проверить все beam с неподвижной колонкой",
+    )
+    sweep_parser.add_argument("output_dir", type=Path)
+    sweep_parser.add_argument("--device", default="hw:MicArray,0")
+    sweep_parser.add_argument("--serial-device", default=DEFAULT_SERIAL_DEVICE)
+    sweep_parser.add_argument("--position-deg", type=float, default=0.0)
+    sweep_parser.add_argument("--label", default="front")
+    sweep_parser.add_argument("--distance-m", type=positive_float, default=1.0)
+    sweep_parser.add_argument("--repeats", type=positive_int, default=1)
+    sweep_parser.add_argument("--gain", type=float, default=16.0)
+    sweep_parser.add_argument("--pre-roll-seconds", type=positive_float, default=1.0)
+    sweep_parser.add_argument("--post-roll-seconds", type=positive_float, default=1.0)
+    sweep_parser.add_argument("--signal-seconds", type=positive_float, default=3.0)
+    sweep_parser.add_argument("--signal-rms-dbfs", type=float, default=-18.0)
+    sweep_parser.add_argument("--signal-file", type=Path)
+    sweep_parser.add_argument(
+        "--player",
+        help="команда playback; {file} заменяется путём к тестовому WAV",
+    )
+    sweep_parser.add_argument(
+        "--beams",
+        default=BEAM_COMMANDS,
+        help="например 0123456789AB или 0,3,6,9",
+    )
+    sweep_parser.add_argument(
+        "--beam-settle-seconds",
+        type=nonnegative_float,
+        default=0.5,
+    )
+    sweep_parser.add_argument(
+        "--start-allowance-seconds",
+        type=nonnegative_float,
+        default=2.0,
+        help="запас записи и диапазон поиска задержки запуска player",
+    )
+    sweep_parser.add_argument(
+        "--preview",
+        action="store_true",
+        help="один раз проиграть сигнал для настройки громкости",
+    )
+    sweep_parser.add_argument(
+        "--skip-prompt",
+        action="store_true",
+        help="начать без ожидания Enter",
+    )
+
+    sweep_summary_parser = subparsers.add_parser(
+        "sweep-summary",
+        help="ранжировать CH6 по результатам fixed-source sweep",
+    )
+    sweep_summary_parser.add_argument("input_dir", type=Path)
+    sweep_summary_parser.add_argument(
+        "--no-write",
+        action="store_true",
+        help="не создавать CSV/JSON",
+    )
+
+    fit_map_parser = subparsers.add_parser(
+        "fit-map",
+        help="восстановить offset/CW по sweep из нескольких положений",
+    )
+    fit_map_parser.add_argument("input_dirs", type=Path, nargs="+")
+    fit_map_parser.add_argument("--output", type=Path)
     return parser
 
 
@@ -617,12 +686,48 @@ def main() -> int:
                 clockwise=not args.counterclockwise,
                 opposite=args.opposite,
             )
-        else:
+        elif args.command == "summarize":
             print_directory_summary(
                 args.input_dir,
                 noise_seconds=args.noise_seconds,
             )
-    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        elif args.command == "sweep":
+            from .beam_sweep import record_fixed_source_sweep
+
+            record_fixed_source_sweep(
+                args.output_dir,
+                device=args.device,
+                serial_device=args.serial_device,
+                position_deg=args.position_deg,
+                source_label=args.label,
+                distance_m=args.distance_m,
+                repeats=args.repeats,
+                pre_roll_seconds=args.pre_roll_seconds,
+                post_roll_seconds=args.post_roll_seconds,
+                signal_seconds=args.signal_seconds,
+                signal_rms_dbfs=args.signal_rms_dbfs,
+                beam_settle_seconds=args.beam_settle_seconds,
+                start_allowance_seconds=args.start_allowance_seconds,
+                gain=args.gain,
+                player=args.player,
+                signal_file=args.signal_file,
+                beams=args.beams,
+                preview=args.preview,
+                skip_prompt=args.skip_prompt,
+            )
+        elif args.command == "sweep-summary":
+            from .beam_sweep import print_sweep_report, summarize_fixed_source_sweep
+
+            report = summarize_fixed_source_sweep(args.input_dir)
+            print_sweep_report(report, write_files=not args.no_write)
+        elif args.command == "fit-map":
+            from .beam_sweep import fit_beam_mapping, print_beam_mapping
+
+            result = fit_beam_mapping(args.input_dirs)
+            print_beam_mapping(result, output=args.output)
+        else:  # pragma: no cover - argparse enforces known subcommands
+            raise ValueError(f"Неизвестная команда: {args.command}")
+    except (OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
         print(f"Ошибка: {exc}")
         return 1
     return 0

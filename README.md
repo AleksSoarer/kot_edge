@@ -1,21 +1,29 @@
 # Kot Edge
 
-Текущая версия: **0.13.0**.
+Текущая версия: **0.14.0**.
 
 Локальный интерфейс и voice-worker Кота для Khadas VIM3.
 
-Версия 0.13.0 подготовлена для проверки всего микрофонного тракта:
+Версия 0.14.0 продолжает диагностику плохой слышимости без изменения рабочего
+wake/ASR-тракта:
 
-- wake-word по умолчанию распознаётся с ненаправленного сырого `CH7`, а после
-  активации команда — с аппаратно сформированного `CH6`;
-- `kot-mic-calibrate circle` управляет фиксированным лучом и записывает круговой
-  тест по 12 направлениям, а `summarize` сравнивает все каналы и aligned/opposite
-  варианты `CH6`;
-- многоканальный WAV можно разложить на восемь mono-файлов командой `split`;
-- hotmap сообщает отсутствие кадров, применяет устойчивое голосование по направлению
-  и периодически пишет фактическое состояние beamforming в журнал;
-- `kot-recognition-report` строит сводку распознанных фраз, timeout, направлений и
-  использованных каналов.
+- новый `kot-mic-calibrate sweep` автоматически перебирает `0..9/A/B`, оставляя
+  колонку и массив неподвижными и проигрывая для каждого beam один и тот же
+  детерминированный широкополосный speech-band сигнал;
+- `sweep-summary` автоматически находит фактическое начало playback, нормализует
+  CH6 относительно медианы сырых CH0–CH5/CH7, ранжирует beam и пишет CSV/JSON;
+- `fit-map` объединяет sweep из нескольких физических положений и выдаёт проверенные
+  `KOT_AUTO_BEAM_OFFSET` и `KOT_AUTO_BEAM_CLOCKWISE`, но не рекомендует применять
+  их при слабой или неоднозначной диаграмме;
+- повторные проходы выполняются в прямом и обратном порядке, чтобы медленный дрейф
+  громкости или фонового шума не выглядел направленностью;
+- восстановлен отсутствовавший в переданном архиве `pyproject.toml`; версия пакета
+  и API теперь берётся из `kot.__version__`;
+- serial raw-mode теперь действительно best-effort: `termios.error` не ломает
+  работу на нестандартном CDC-драйвере и не валит unit-тесты с mock-дескриптором.
+
+Сохранены возможности 0.13.0: wake на сыром CH7, команда на CH6, hotmap/auto-beam,
+круговая ручная калибровка, разложение каналов и JSONL-журнал распознавания.
 
 Результаты распознавания сохраняются в ротационный JSONL-журнал:
 
@@ -322,6 +330,111 @@ arecord --dump-hw-params -D hw:MicArray,0 /dev/null
 .venv/bin/kot-mic-calibrate analyze ~/kot-mic-tests/control.wav
 .venv/bin/kot-mic-calibrate split ~/kot-mic-tests/control.wav
 ```
+
+### Рекомендуемый тест: неподвижная колонка и автоматический beam sweep
+
+Ручной `circle` полезен для проверки речи вокруг массива, но плохо подходит для
+восстановления абсолютной геометрии: громкость голоса, поза и расстояние меняются
+между дублями. Для выбора beam сначала используйте `sweep`.
+
+Остановите voice-worker и поставьте Яндекс Музыку на паузу, чтобы ALSA-устройство
+было свободно, а фон не попал в измерение:
+
+```bash
+sudo systemctl stop kot-edge-voice
+playerctl pause
+cd ~/kot_edge
+```
+
+Зафиксируйте массив. Поставьте одну колонку примерно в метре перед физическим
+нулевым направлением массива. Во время одного sweep не двигайте массив, колонку,
+мебель и не меняйте громкость. Первый запуск лучше сделать с двумя повторами и
+предпрослушиванием:
+
+```bash
+.venv/bin/kot-mic-calibrate sweep ~/kot-mic-tests/sweep-front \
+  --label front \
+  --position-deg 0 \
+  --distance-m 1.0 \
+  --repeats 2 \
+  --preview
+```
+
+Скрипт создаёт `calibration-signal.wav`, затем для каждого beam:
+
+1. отправляет MA-USB8 символ `0..9/A/B`;
+2. ждёт стабилизацию луча;
+3. запускает исходную 8-канальную запись;
+4. сохраняет участок тишины;
+5. проигрывает один и тот же broadband speech-band WAV;
+6. оставляет хвост записи и пишет sidecar JSON.
+
+Во втором повторе beam идут в обратном порядке. Это отделяет настоящую
+направленность от медленного изменения громкости, температуры или шума комнаты.
+
+Playback выбирается автоматически в порядке `pw-play`, `paplay`, `aplay`. Если
+звук идёт не в HDMI/ресивер, укажите команду явно; `{file}` будет заменён путём к
+тестовому WAV:
+
+```bash
+.venv/bin/kot-mic-calibrate sweep ~/kot-mic-tests/sweep-front \
+  --position-deg 0 --repeats 2 \
+  --player 'paplay {file}'
+
+.venv/bin/kot-mic-calibrate sweep ~/kot-mic-tests/sweep-front \
+  --position-deg 0 --repeats 2 \
+  --player 'aplay -q -D default {file}'
+```
+
+Анализ:
+
+```bash
+.venv/bin/kot-mic-calibrate sweep-summary ~/kot-mic-tests/sweep-front
+```
+
+Основной `score` — уровень CH6 минус медианный уровень сырых CH0–CH5/CH7. Поэтому
+небольшой дрейф громкости источника не должен менять победителя. Отчёт отдельно
+показывает CH6 signal RMS, rough SNR, разброс повторов, peak, clipping, лучший beam,
+его противоположный сектор и оценку направленности `strong/usable/weak`.
+Создаются файлы:
+
+```text
+beam-sweep-summary.csv
+beam-sweep-summary.json
+```
+
+Один sweep определяет лучший beam для одной точки, но не может надёжно различить
+clockwise и counterclockwise. Для полной привязки сделайте четыре запуска, меняя
+только положение колонки и сохраняя один физический ноль:
+
+```bash
+.venv/bin/kot-mic-calibrate sweep ~/kot-mic-tests/sweep-front \
+  --label front --position-deg 0 --repeats 2
+.venv/bin/kot-mic-calibrate sweep ~/kot-mic-tests/sweep-right \
+  --label right --position-deg 90 --repeats 2
+.venv/bin/kot-mic-calibrate sweep ~/kot-mic-tests/sweep-back \
+  --label back --position-deg 180 --repeats 2
+.venv/bin/kot-mic-calibrate sweep ~/kot-mic-tests/sweep-left \
+  --label left --position-deg 270 --repeats 2
+
+.venv/bin/kot-mic-calibrate fit-map \
+  ~/kot-mic-tests/sweep-front \
+  ~/kot-mic-tests/sweep-right \
+  ~/kot-mic-tests/sweep-back \
+  ~/kot-mic-tests/sweep-left \
+  --output ~/kot-mic-tests/beam-map.json
+```
+
+При согласованных данных `fit-map` печатает готовые значения:
+
+```text
+KOT_AUTO_BEAM_OFFSET=N
+KOT_AUTO_BEAM_CLOCKWISE=0|1
+```
+
+При `weak`, неоднозначности или большой секторной ошибке инструмент намеренно не
+советует применять настройки. В таком случае увеличение `KOT_MIC_GAIN` не лечит
+проблему: сначала нужно понять, действительно ли CH6 формирует выраженный луч.
 
 ### Круговой тест raw-каналов и CH6
 

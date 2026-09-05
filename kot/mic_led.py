@@ -144,7 +144,7 @@ class MicArrayLeds:
         if tty is not None and termios is not None:
             try:
                 tty.setraw(descriptor, when=termios.TCSANOW)
-            except OSError:
+            except (OSError, termios.error):
                 # CDC ACM normally accepts raw mode; keep best-effort writes
                 # working on unusual drivers and mocked descriptors.
                 pass
